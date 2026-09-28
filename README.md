@@ -42,6 +42,8 @@
 ## Как запустить
 
 ### Вариант 1: готовый `.exe`
+**[⬇ Скачать FPSBooster.exe](../../releases/latest/download/FPSBooster.exe)** (последняя сборка).
+
 GitHub Actions собирает `FPSBooster.exe` при каждом пуше: **Actions → build → Artifacts → FPSBooster**. Если запушить тег `v*`, exe попадёт ещё и в Releases. Запустите файл и подтвердите запрос администратора.
 
 ### Вариант 2: собрать самому
