@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MicPro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Unbounded:wght@600;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #05060a;
+  --panel: rgba(255, 255, 255, .035);
+  --panel-2: rgba(255, 255, 255, .06);
+  --border: rgba(255, 255, 255, .075);
+  --border-strong: rgba(255, 255, 255, .14);
+  --text: #eef1f8;
+  --muted: #858ca3;
+  --dim: #565d73;
+  --a1: #19e3ff;
+  --a2: #6a7bff;
+  --a3: #b04dff;
+  --good: #2de2a6;
+  --bad: #ff4d6d;
+  --warn: #ffc24b;
+  --grad: linear-gradient(120deg, var(--a1), var(--a2) 50%, var(--a3));
+  --radius: 18px;
+  --font: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --display: "Unbounded", "Segoe UI Variable Display", "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); overflow: hidden; user-select: none; -webkit-font-smoothing: antialiased; }
+.backdrop { position: fixed; inset: 0; z-index: -1; overflow: hidden; }
+.blob { position: absolute; border-radius: 50%; filter: blur(100px); animation: drift 24s ease-in-out infinite alternate; }
+.b1 { width: 540px; height: 540px; background: #0fb8ff; top: -260px; left: 160px; opacity: .22; }
+.b2 { width: 600px; height: 600px; background: #8a2dff; bottom: -300px; right: -140px; opacity: .28; animation-delay: -9s; }
+.b3 { width: 360px; height: 360px; background: #3d5bff; top: 45%; left: 40%; opacity: .12; animation-delay: -15s; }
+@keyframes drift { to { transform: translate(60px, 40px) scale(1.12); } }
+body.idle .blob { animation-play-state: paused; }
+.grid { position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,.022) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.022) 1px, transparent 1px); background-size: 44px 44px; mask-image: radial-gradient(ellipse at 50% 30%, #000 20%, transparent 75%); }
+
+.app { display: grid; grid-template-rows: 44px 1fr; height: 100vh; }
+.titlebar { display: flex; align-items: center; gap: 12px; padding: 0 6px 0 18px; border-bottom: 1px solid var(--border); background: rgba(5, 6, 10, .55); backdrop-filter: blur(20px); }
+.logo { display: flex; align-items: center; gap: 10px; font: 800 13px var(--display); letter-spacing: .08em; }
+.logo-mark { width: 24px; height: 24px; border-radius: 8px; background: var(--grad); display: grid; place-items: center; box-shadow: 0 0 18px rgba(80, 140, 255, .55); }
+.logo-mark svg { width: 14px; height: 14px; }
+.badge { font: 600 11px var(--font); padding: 3px 9px; border-radius: 99px; border: 1px solid var(--border-strong); color: var(--muted); white-space: nowrap; }
+.badge.good { color: var(--good); border-color: rgba(45, 226, 166, .35); background: rgba(45, 226, 166, .08); }
+.badge.warn { color: var(--warn); border-color: rgba(255, 194, 75, .35); background: rgba(255, 194, 75, .08); }
+.titlebar .spacer { flex: 1; align-self: stretch; }
+.win-btn { width: 44px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer; transition: .15s; }
+.win-btn:hover { background: var(--panel-2); color: var(--text); }
+.win-btn.close:hover { background: #e81123; color: #fff; }
+
+.body { display: grid; grid-template-columns: 232px 1fr; min-height: 0; }
+.sidebar { padding: 20px 14px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--border); }
+.nav { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 12px; color: var(--muted); cursor: pointer; font-weight: 500; transition: .18s; position: relative; }
+.nav svg { width: 18px; height: 18px; flex: none; }
+.nav:hover { color: var(--text); background: var(--panel); }
+.nav.active { color: var(--text); background: var(--panel-2); }
+.nav.active::before { content: ""; position: absolute; left: -14px; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: var(--grad); }
+.nav .dotw { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 8px var(--warn); display: none; }
+.nav .dotw.show { display: block; }
+.side-foot { margin-top: auto; display: grid; gap: 10px; }
+.mini { padding: 14px; border-radius: 14px; background: var(--panel); border: 1px solid var(--border); }
+.mini .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.mini h4 { font-size: 13px; font-weight: 600; }
+.mini p { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+.switch { position: relative; width: 40px; height: 22px; flex: none; cursor: pointer; }
+.switch input { display: none; }
+.switch i { position: absolute; inset: 0; border-radius: 99px; background: rgba(255,255,255,.1); transition: .25s; border: 1px solid var(--border); }
+.switch i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: .25s cubic-bezier(.4, 1.4, .6, 1); box-shadow: 0 2px 6px rgba(0,0,0,.4); }
+.switch input:checked + i { background: var(--grad); border-color: transparent; box-shadow: 0 0 14px rgba(90, 120, 255, .45); }
+.switch input:checked + i::after { transform: translateX(18px); }
+
+.main { overflow-y: auto; padding: 26px 30px 30px; }
+.main::-webkit-scrollbar { width: 10px; }
+.main::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+.page { display: none; animation: enter .45s cubic-bezier(.2, .8, .2, 1); }
+.page.active { display: block; }
+@keyframes enter { from { opacity: 0; transform: translateY(10px); } }
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+h1 { font: 800 26px var(--display); letter-spacing: -.01em; }
+.g { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lead { color: var(--muted); margin-top: 6px; }
+h3 { font: 600 12px var(--font); text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin: 26px 0 12px; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); backdrop-filter: blur(18px); position: relative; }
+
+/* студия */
+.studio { display: grid; grid-template-columns: 330px 1fr; gap: 18px; }
+.power-card { padding: 24px; display: flex; flex-direction: column; align-items: center; text-align: center; overflow: hidden; }
+.power-card::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: radial-gradient(circle at 50% 30%, rgba(40, 150, 255, .14), transparent 60%); }
+.pwr-wrap { position: relative; width: 176px; height: 176px; margin: 4px 0 16px; }
+.pwr-glow { position: absolute; inset: 8px; border-radius: 50%; background: conic-gradient(var(--a1), var(--a2), var(--a3), var(--a1)); filter: blur(26px); opacity: 0; transition: opacity .6s; animation: spin 5s linear infinite; }
+.pwr { position: absolute; inset: 0; border-radius: 50%; border: 0; cursor: pointer; color: var(--muted); display: grid; place-items: center; isolation: isolate; background: radial-gradient(circle at 50% 35%, #1a1d28, #0a0b11 70%); box-shadow: 0 20px 50px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.08); transition: transform .25s cubic-bezier(.3, 1.5, .5, 1), color .3s; }
+.pwr::before { content: ""; position: absolute; inset: -3px; border-radius: 50%; z-index: -1; background: rgba(255,255,255,.08); transition: .4s; }
+.pwr::after { content: ""; position: absolute; inset: 0; border-radius: 50%; z-index: -1; background: radial-gradient(circle at 50% 35%, #1a1d28, #0a0b11 70%); }
+.pwr:hover { transform: scale(1.04); }
+.pwr:active { transform: scale(.97); }
+.pwr svg { width: 46px; height: 46px; }
+.pwr .lbl { font: 800 13px var(--display); letter-spacing: .12em; margin-top: 6px; }
+.on .pwr { color: #fff; }
+.on .pwr::before { background: conic-gradient(from 0deg, var(--a1), var(--a2), var(--a3), var(--a1)); animation: spin 5s linear infinite; }
+.on .pwr-glow { opacity: .5; }
+.pulse-ring { position: absolute; inset: -6px; border-radius: 50%; border: 2px solid var(--a1); opacity: 0; }
+.on .pulse-ring { animation: ring 2.4s ease-out infinite; }
+@keyframes ring { 0% { transform: scale(.95); opacity: .5; } 100% { transform: scale(1.25); opacity: 0; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+.status { font: 800 18px var(--display); }
+.status-sub { color: var(--muted); font-size: 13px; margin-top: 4px; min-height: 19px; }
+.chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 14px; }
+.chip { font-size: 12px; padding: 5px 10px; border-radius: 99px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.chip b { color: var(--text); font-weight: 600; }
+.ab { margin-top: 16px; width: 100%; }
+.btn { border: 1px solid var(--border-strong); background: var(--panel-2); color: var(--text); padding: 9px 16px; border-radius: 11px; font: 600 13px var(--font); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; transition: .18s; white-space: nowrap; }
+.btn svg { width: 16px; height: 16px; }
+.btn:hover { background: rgba(255,255,255,.1); }
+.btn.primary { background: var(--grad); border-color: transparent; color: #fff; box-shadow: 0 8px 24px rgba(90, 110, 255, .35); }
+.btn.hold.pressed { background: rgba(255, 194, 75, .15); border-color: rgba(255, 194, 75, .5); color: var(--warn); }
+.ll-row { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); text-align: left; }
+
+.an-card { padding: 18px 18px 14px; display: grid; grid-template-columns: 1fr 76px; grid-template-rows: auto 1fr auto; gap: 10px 16px; min-height: 360px; }
+.an-head { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; }
+.an-head .name { color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+#spec { width: 100%; height: 100%; min-height: 220px; display: block; }
+.meters { display: flex; gap: 10px; justify-content: center; }
+.meter { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); font-weight: 600; }
+.meter .bar { width: 16px; flex: 1; border-radius: 8px; background: rgba(255,255,255,.05); position: relative; overflow: hidden; border: 1px solid var(--border); }
+.meter .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: linear-gradient(0deg, var(--good), #b8f55a 70%, var(--warn) 88%, var(--bad)); background-size: 100% 220px; background-position: bottom; transition: height .06s linear; }
+.meter .val { font-variant-numeric: tabular-nums; color: var(--text); font-size: 11px; }
+.fx-row { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.fx { padding: 9px 11px; border-radius: 12px; background: var(--panel); border: 1px solid var(--border); }
+.fx .k { font-size: 11px; color: var(--muted); }
+.fx .v { font: 700 14px var(--font); font-variant-numeric: tabular-nums; margin-top: 2px; display: flex; align-items: center; gap: 6px; }
+.led { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+.led.on { background: var(--good); box-shadow: 0 0 10px var(--good); }
+
+.dev-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+.dev { padding: 16px 18px; }
+.dev label.t { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dev .hint { font-size: 12px; color: var(--dim); margin-top: 8px; }
+.dev .hint.bad { color: var(--warn); }
+select { width: 100%; margin-top: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border-strong); background: rgba(0,0,0,.35); color: var(--text); font: 500 13px var(--font); outline: none; cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%23858ca3' stroke-width='2' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; }
+select:focus { border-color: rgba(90, 140, 255, .6); }
+option { background: #11131b; }
+
+.presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.preset { padding: 16px 18px; cursor: pointer; transition: .2s; overflow: hidden; }
+.preset:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+.preset.active { border-color: rgba(90, 140, 255, .55); background: linear-gradient(135deg, rgba(25, 227, 255, .08), rgba(176, 77, 255, .09)); box-shadow: 0 10px 30px rgba(60, 90, 255, .15); }
+.preset .ic { font-size: 22px; }
+.preset h4 { font-size: 15px; margin-top: 8px; }
+.preset p { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+.mods { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.mod { padding: 16px 18px; transition: .2s; }
+.mod.off { opacity: .55; }
+.mod .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.mod h4 { font-size: 14px; font-weight: 600; }
+.mod p { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.mod.wide { grid-column: span 2; }
+.sl { margin-top: 14px; }
+.sl .l { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 7px; }
+.sl .l b { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
+.eq-sliders { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 18px; }
+input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 6px; outline: none; cursor: pointer; background: linear-gradient(90deg, var(--a1), var(--a2) var(--p, 50%), rgba(255,255,255,.08) var(--p, 50%)); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 4px rgba(90, 140, 255, .25), 0 2px 8px rgba(0,0,0,.5); transition: .15s; }
+input[type=range]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 6px rgba(90, 140, 255, .3), 0 2px 8px rgba(0,0,0,.5); }
+.mod.off input[type=range] { filter: grayscale(1); }
+
+/* подключение и советы */
+.steps { display: grid; gap: 12px; }
+.step { padding: 18px 20px; display: grid; grid-template-columns: 44px 1fr auto; gap: 16px; align-items: center; }
+.step .n { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; font: 800 15px var(--display); background: var(--panel-2); border: 1px solid var(--border); }
+.step.ok .n { background: rgba(45, 226, 166, .12); color: var(--good); border-color: rgba(45, 226, 166, .3); }
+.step.need .n { background: rgba(255, 194, 75, .1); color: var(--warn); border-color: rgba(255, 194, 75, .3); }
+.step h4 { font-size: 15px; }
+.step p, .step li { font-size: 13px; color: var(--muted); }
+.step ul { padding-left: 18px; margin-top: 4px; }
+.step b { color: var(--text); font-weight: 600; }
+.kbd { font-family: Consolas, monospace; color: #bfe9ff; background: rgba(25, 227, 255, .08); padding: 1px 7px; border-radius: 6px; border: 1px solid rgba(25, 227, 255, .2); }
+.tips { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+.tip { padding: 20px; }
+.tip .num { font: 800 13px var(--display); background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.tip h4 { font-size: 15px; margin: 6px 0; }
+.tip p { font-size: 13px; color: var(--muted); }
+.tip .big { font: 800 13px var(--font); color: var(--good); margin-top: 10px; }
+
+.toasts { position: fixed; right: 22px; bottom: 22px; display: grid; gap: 10px; z-index: 60; }
+.toast { padding: 12px 16px; border-radius: 14px; background: rgba(22, 24, 34, .94); border: 1px solid var(--border-strong); backdrop-filter: blur(16px); box-shadow: 0 16px 40px rgba(0,0,0,.45); display: flex; gap: 10px; align-items: center; animation: slide .35s cubic-bezier(.2, 1.2, .4, 1); font-weight: 500; max-width: 380px; }
+.toast.out { animation: slideout .3s forwards; }
+.toast .d { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+@keyframes slide { from { transform: translateX(40px); opacity: 0; } }
+@keyframes slideout { to { transform: translateX(40px); opacity: 0; } }
+.banner { padding: 14px 18px; border-radius: 14px; border: 1px solid rgba(255, 194, 75, .3); background: rgba(255, 194, 75, .07); color: #ffe2a6; font-size: 13px; display: none; align-items: center; gap: 14px; margin-bottom: 18px; }
+.banner.show { display: flex; }
+.banner span { flex: 1; }
+
+@media (max-width: 1100px) {
+  .studio { grid-template-columns: 1fr; }
+  .mods, .dev-grid { grid-template-columns: 1fr 1fr; }
+  .presets { grid-template-columns: 1fr 1fr; }
+  .mod.wide { grid-column: span 2; }
+}
+</style>
+</head>
+<body>
+<div class="backdrop"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="grid"></div></div>
+
+<div class="app">
+  <header class="titlebar pywebview-drag-region">
+    <div class="logo">
+      <div class="logo-mark"><svg viewBox="0 0 24 24" fill="#fff"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0h-2a5 5 0 0 1-10 0zM11 18h2v4h-2z"/></svg></div>
+      MIC PRO
+    </div>
+    <span class="badge" id="verBadge">v1.0</span>
+    <span class="badge" id="micBadge">…</span>
+    <div class="spacer pywebview-drag-region"></div>
+    <button class="win-btn" onclick="api('minimize')" title="Свернуть"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor" stroke-width="1.3"/></svg></button>
+    <button class="win-btn close" onclick="api('close')" title="Закрыть"><svg width="12" height="12" viewBox="0 0 12 12"><path d="m1.5 1.5 9 9m0-9-9 9" stroke="currentColor" stroke-width="1.3"/></svg></button>
+  </header>
+
+  <div class="body">
+    <nav class="sidebar">
+      <div class="nav active" data-page="studio">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 18V9M9 18V5M14 18v-7M19 18V8"/></svg>Студия</div>
+      <div class="nav" data-page="setup">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 7V3M15 7V3M7 7h10v5a5 5 0 0 1-10 0zM12 17v4"/></svg>Подключение<span class="dotw" id="setupDot"></span></div>
+      <div class="nav" data-page="tips">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.8.6 1.1 1.3 1.1 2.2h5c0-.9.3-1.6 1.1-2.2A6 6 0 0 0 12 3Z"/></svg>Советы для AM8</div>
+      <div class="side-foot">
+        <div class="mini">
+          <div class="row"><h4>Запуск с Windows</h4><label class="switch"><input type="checkbox" id="autoSw"><i></i></label></div>
+          <p>MicPro сам включится в фоне — голос всегда обработан</p>
+        </div>
+      </div>
+    </nav>
+
+    <main class="main">
+      <!-- СТУДИЯ -->
+      <section class="page active" id="page-studio">
+        <div class="page-head">
+          <div>
+            <h1>Звук как у <span class="g">студийного</span> микрофона</h1>
+            <p class="lead">Шумоподавление, эквалайзер, компрессор и лимитер в реальном времени. Меньше 1% процессора.</p>
+          </div>
+        </div>
+        <div class="banner" id="cableBanner">
+          <span>⚠ Не найден <b>VB-Cable</b> — бесплатный виртуальный микрофон, через который обработанный голос попадает в Discord и игры.</span>
+          <button class="btn primary" onclick="api('open_url','https://vb-audio.com/Cable/')">Скачать</button>
+          <button class="btn" onclick="go('setup')">Инструкция</button>
+        </div>
+
+        <div class="studio">
+          <div class="card power-card" id="powerCard">
+            <div class="pwr-wrap">
+              <div class="pwr-glow"></div><div class="pulse-ring"></div>
+              <button class="pwr" id="pwrBtn">
+                <div style="display:grid;justify-items:center">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
+                  <span class="lbl" id="pwrLbl">ВКЛ</span>
+                </div>
+              </button>
+            </div>
+            <div class="status" id="status">Выключено</div>
+            <div class="status-sub" id="statusSub">Нажмите, чтобы улучшить микрофон</div>
+            <div class="chips">
+              <span class="chip">Задержка <b id="lat">—</b></span>
+              <span class="chip">CPU <b id="cpu">—</b></span>
+            </div>
+            <button class="btn hold ab" id="abBtn" title="Удерживайте, чтобы услышать звук без обработки">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 7h10M7 7l3-3M7 7l3 3M17 17H7M17 17l-3-3M17 17l-3 3"/></svg>
+              Удерживайте — оригинал</button>
+            <div class="ll-row"><span>Минимальная задержка<br><small style="color:var(--dim)">5 мс блок вместо 10 мс</small></span>
+              <label class="switch"><input type="checkbox" id="llSw"><i></i></label></div>
+          </div>
+
+          <div class="card an-card">
+            <div class="an-head"><span class="name">Анализатор голоса</span>
+              <div class="legend"><span><i style="background:#4a5068"></i>Было</span><span><i style="background:linear-gradient(90deg,var(--a1),var(--a3))"></i>Стало</span></div></div>
+            <canvas id="spec"></canvas>
+            <div class="meters">
+              <div class="meter"><span>IN</span><div class="bar"><div class="fill" id="mIn"></div></div><span class="val" id="vIn">—</span></div>
+              <div class="meter"><span>OUT</span><div class="bar"><div class="fill" id="mOut"></div></div><span class="val" id="vOut">—</span></div>
+            </div>
+            <div class="fx-row">
+              <div class="fx"><div class="k">Шум убран</div><div class="v" id="fxNoise">—</div></div>
+              <div class="fx"><div class="k">Гейт</div><div class="v"><span class="led" id="fxGateLed"></span><span id="fxGate">—</span></div></div>
+              <div class="fx"><div class="k">Компрессия</div><div class="v" id="fxComp">—</div></div>
+              <div class="fx"><div class="k">Де-эссер</div><div class="v" id="fxDeess">—</div></div>
+              <div class="fx"><div class="k">Лимитер</div><div class="v" id="fxLim">—</div></div>
+            </div>
+          </div>
+        </div>
+
+        <h3>Устройства</h3>
+        <div class="dev-grid">
+          <div class="card dev"><label class="t">Микрофон <span class="badge good" id="am8Tag" style="display:none">AM8 ✓</span></label>
+            <select id="selIn"></select><div class="hint" id="inHint">Откуда берём голос</div></div>
+          <div class="card dev"><label class="t">Виртуальный микрофон</label>
+            <select id="selOut"></select><div class="hint" id="outHint">Выберите «CABLE Input» — в Discord будет «CABLE Output»</div></div>
+          <div class="card dev"><label class="t">Слышать себя <label class="switch"><input type="checkbox" id="monSw"><i></i></label></label>
+            <select id="selMon"></select>
+            <div class="sl" style="margin-top:12px"><div class="l">Громкость <b id="monVolV">80%</b></div><input type="range" id="monVol" min="0" max="150" step="1" value="80"></div></div>
+        </div>
+
+        <h3>Пресеты</h3>
+        <div class="presets" id="presets"></div>
+
+        <h3>Обработка</h3>
+        <div class="mods" id="mods"></div>
+      </section>
+
+      <!-- ПОДКЛЮЧЕНИЕ -->
+      <section class="page" id="page-setup">
+        <div class="page-head"><div><h1>Подключение</h1><p class="lead">5 минут один раз — и чистый голос везде: Discord, CS2, Dota 2, OBS, Telegram.</p></div>
+          <button class="btn" id="refreshBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>Обновить устройства</button></div>
+        <div class="steps">
+          <div class="card step" id="stCable"><div class="n">1</div>
+            <div><h4>Установите VB-Cable (бесплатно)</h4>
+              <p>Это виртуальный провод: MicPro отправляет в него обработанный голос, а программы видят его как микрофон <b>«CABLE Output»</b>.</p>
+              <ul><li>Скачайте архив, распакуйте, запустите <span class="kbd">VBCABLE_Setup_x64.exe</span> от имени администратора → Install Driver</li><li>Перезагрузите ПК и нажмите «Обновить устройства»</li></ul></div>
+            <button class="btn primary" onclick="api('open_url','https://vb-audio.com/Cable/')">Скачать VB-Cable</button></div>
+          <div class="card step" id="stMic"><div class="n">2</div>
+            <div><h4>Подключите FIFINE AM8 по USB</h4>
+              <p>В <b>задний</b> USB-порт материнской платы, не в хаб и не в переднюю панель — меньше помех и обрывов. Можно по XLR через аудиоинтерфейс: тогда выберите интерфейс как микрофон.</p></div>
+            <span class="badge" id="stMicBadge">—</span></div>
+          <div class="card step"><div class="n">3</div>
+            <div><h4>Discord</h4>
+              <ul><li>Настройки → Голос и видео → Устройство ввода: <b>CABLE Output (VB-Audio Virtual Cable)</b></li>
+                <li>Выключите <b>шумоподавление Krisp</b>, <b>эхоподавление</b> и <b>автоматическую регулировку усиления</b> — MicPro делает это лучше, двойная обработка портит звук</li></ul></div></div>
+          <div class="card step"><div class="n">4</div>
+            <div><h4>CS2, Dota 2 и другие игры</h4>
+              <p>Игры берут микрофон Windows по умолчанию. Сделайте <b>CABLE Output</b> устройством записи по умолчанию: Параметры → Система → Звук → Ввод.</p></div>
+            <button class="btn" onclick="api('open_sound_settings')">Открыть настройки звука</button></div>
+          <div class="card step"><div class="n">5</div>
+            <div><h4>OBS / стрим</h4>
+              <p>Источник «Захват входного аудиопотока» → <b>CABLE Output</b>. Фильтры шумодава в OBS не нужны.</p></div></div>
+        </div>
+      </section>
+
+      <!-- СОВЕТЫ -->
+      <section class="page" id="page-tips">
+        <div class="page-head"><div><h1>Выжмите максимум из <span class="g">AM8</span></h1><p class="lead">Программа делает 50% работы. Остальные 50% — правильная постановка микрофона.</p></div></div>
+        <div class="tips">
+          <div class="card tip"><div class="num">01</div><h4>Говорите в торец, а не в бок</h4><p>AM8 — динамический микрофон с приёмом <b>с торца</b> (end-address). Говорите в «сетку» сверху, будто в мороженое.</p><div class="big">самая частая ошибка</div></div>
+          <div class="card tip"><div class="num">02</div><h4>Расстояние 5–10 см</h4><p>Динамику нужно быть близко: голос плотнее и «радийнее», а шум комнаты и клавиатуры в 4 раза тише. Дальше 15 см — звук становится глухим.</p></div>
+          <div class="card tip"><div class="num">03</div><h4>Ручка Gain на микрофоне</h4><p>Выставьте так, чтобы при обычной речи индикатор IN доходил до жёлтой зоны, но не краснел. Обычно 60–75%. Громкость в Windows для AM8 — 100.</p></div>
+          <div class="card tip"><div class="num">04</div><h4>Ветрозащита и угол</h4><p>Наденьте поролоновую ветрозащиту из комплекта и поверните микрофон чуть мимо рта (15–30°) — пропадут «пуф» на звуках «п» и «б».</p></div>
+          <div class="card tip"><div class="num">05</div><h4>Настройки Windows</h4><p>Звук → AM8 → Свойства: формат <b>48000 Гц</b>, выключите «Улучшения звука» и «Разрешить приложениям монополию». Это убирает лаги и щелчки.</p></div>
+          <div class="card tip"><div class="num">06</div><h4>Стойка-пантограф</h4><p>Удары по столу и клавиатуре идут через подставку. Пантограф или хотя бы коврик под подставкой убирают их почти полностью.</p></div>
+          <div class="card tip"><div class="num">07</div><h4>Слышать себя без задержки</h4><p>У AM8 есть разъём для наушников с нулевой задержкой. Для настройки звука удобнее «Слышать себя» в MicPro — там слышно результат обработки.</p></div>
+          <div class="card tip"><div class="num">08</div><h4>Если голос «лагает»</h4><p>Включите «Минимальная задержка», закройте другие программы обработки (NVIDIA Broadcast, Krisp, Voicemod) и подключите AM8 в задний USB 2.0/3.0 порт.</p></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+<div class="toasts" id="toasts"></div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+let S = null;
+let running = false;
+const specIn = new Array(48).fill(0), specOut = new Array(48).fill(0);
+const dispIn = new Array(48).fill(0), dispOut = new Array(48).fill(0);
+
+function api(name, ...args) {
+  if (window.pywebview && window.pywebview.api) return window.pywebview.api[name](...args);
+  return Promise.resolve(Mock[name] ? Mock[name](...args) : null);
+}
+function toast(msg, kind = "ok") {
+  const el = document.createElement("div");
+  el.className = "toast";
+  const c = { ok: "var(--good)", err: "var(--bad)", warn: "var(--warn)" }[kind];
+  el.innerHTML = `<span class="d" style="background:${c};box-shadow:0 0 10px ${c}"></span>${esc(msg)}`;
+  $("#toasts").appendChild(el);
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 300); }, 3400);
+}
+function go(page) {
+  $$(".nav").forEach(n => n.classList.toggle("active", n.dataset.page === page));
+  $$(".page").forEach(p => p.classList.toggle("active", p.id === "page-" + page));
+  $(".main").scrollTop = 0;
+}
+$$(".nav").forEach(n => n.addEventListener("click", () => go(n.dataset.page)));
+
+const PRESETS = {
+  stream:  ["🎙", "Стрим", "Плотный «радийный» голос"],
+  discord: ["🎮", "Discord / игры", "Максимум разборчивости"],
+  podcast: ["☕", "Подкаст", "Тёплый, близкий голос"],
+  natural: ["🌿", "Натуральный", "Минимум окраски"],
+};
+const MODULES = [
+  { key: "denoise", title: "Шумоподавление", desc: "Гул ПК, вентиляторы, шипение, кондиционер", sl: [["denoise_db", "Сила", 6, 30, 1, " дБ"]] },
+  { key: "gate", title: "Шумовой гейт", desc: "Тишина между фразами — клавиатура не слышна", sl: [["gate_db", "Порог", -75, -25, 1, " дБ"]] },
+  { key: "comp", title: "Компрессор", desc: "Шёпот и крик звучат на одном уровне", sl: [["comp_amount", "Плотность", 0, 100, 1, "%"]] },
+  { key: "eq", title: "Эквалайзер голоса", desc: "Под динамический AM8: бархат 150 Гц · бубнёж 350 Гц · чёткость 4 кГц · воздух 11 кГц", wide: true,
+    sl: [["warmth_db", "Бархат", -4, 6, .5, " дБ", 1], ["mud_db", "Бубнёж", -8, 2, .5, " дБ", 1], ["presence_db", "Чёткость", -2, 8, .5, " дБ", 1], ["air_db", "Воздух", -2, 6, .5, " дБ", 1]] },
+  { key: "deess", title: "Де-эссер", desc: "Мягче резкие «с», «ш», «ч»", sl: [["deess_db", "Сила", 0, 12, .5, " дБ"]] },
+  { key: "highpass", title: "Срез низа", desc: "Удары по столу, гул, «пух» от дыхания", sl: [["highpass_hz", "Частота", 40, 200, 5, " Гц"]] },
+  { key: "limiter", title: "Громкость и лимитер", desc: "Громко, но никогда не хрипит и не перегружает Discord", wide: true, sl: [["output_db", "Громкость", -12, 12, .5, " дБ", 1]] },
+];
+
+const fmt = (v, unit, signed) => (signed && v > 0 ? "+" : "") + (Math.round(v * 10) / 10) + unit;
+const setFill = inp => inp.style.setProperty("--p", ((inp.value - inp.min) / (inp.max - inp.min) * 100) + "%");
+
+function renderPresets() {
+  $("#presets").innerHTML = Object.entries(PRESETS).map(([k, [ic, t, d]]) =>
+    `<div class="card preset ${S.preset === k ? "active" : ""}" data-p="${k}"><div class="ic">${ic}</div><h4>${t}</h4><p>${d}</p></div>`).join("");
+  $$(".preset").forEach(el => el.addEventListener("click", async () => {
+    const s = await api("apply_preset", el.dataset.p);
+    if (s) S.settings = s;
+    S.preset = el.dataset.p;
+    renderPresets(); renderMods();
+    toast(`Пресет «${PRESETS[el.dataset.p][1]}»`);
+  }));
+}
+
+const pending = {};
+function sendParam(name, value) {
+  clearTimeout(pending[name]);
+  pending[name] = setTimeout(() => api("set_param", name, value), 40);
+}
+
+function renderMods() {
+  const s = S.settings;
+  $("#mods").innerHTML = MODULES.map(m => `
+    <div class="card mod ${m.wide ? "wide" : ""} ${s[m.key] ? "" : "off"}" data-m="${m.key}">
+      <div class="top"><div><h4>${m.title}</h4><p>${m.desc}</p></div>
+        <label class="switch"><input type="checkbox" data-toggle="${m.key}" ${s[m.key] ? "checked" : ""}><i></i></label></div>
+      <div class="${m.sl.length > 1 ? "eq-sliders" : ""}">
+        ${m.sl.map(([k, label, min, max, step, unit, signed]) => `
+          <div class="sl"><div class="l">${label} <b data-v="${k}">${fmt(s[k], unit, signed)}</b></div>
+          <input type="range" data-k="${k}" data-unit="${unit}" data-signed="${signed ? 1 : ""}" min="${min}" max="${max}" step="${step}" value="${s[k]}"></div>`).join("")}
+      </div>
+    </div>`).join("");
+  $$("#mods input[type=range]").forEach(inp => {
+    setFill(inp);
+    inp.addEventListener("input", () => {
+      const v = +inp.value;
+      S.settings[inp.dataset.k] = v;
+      $(`[data-v="${inp.dataset.k}"]`).textContent = fmt(v, inp.dataset.unit, inp.dataset.signed);
+      setFill(inp); sendParam(inp.dataset.k, v);
+      if (S.preset !== "custom") { S.preset = "custom"; $$(".preset").forEach(p => p.classList.remove("active")); }
+    });
+  });
+  $$("[data-toggle]").forEach(inp => inp.addEventListener("change", () => {
+    const k = inp.dataset.toggle;
+    S.settings[k] = inp.checked;
+    inp.closest(".mod").classList.toggle("off", !inp.checked);
+    api("set_param", k, inp.checked);
+  }));
+}
+
+function fillSelect(sel, list, current, emptyLabel) {
+  sel.innerHTML = (emptyLabel ? `<option value="">${emptyLabel}</option>` : "") +
+    list.map(d => `<option ${d.name === current ? "selected" : ""}>${esc(d.name)}</option>`).join("");
+  if (!list.length && !emptyLabel) sel.innerHTML = `<option value="">Устройства не найдены</option>`;
+}
+
+function renderDevices() {
+  const d = S.devices;
+  fillSelect($("#selIn"), d.inputs, S.selected.input);
+  fillSelect($("#selOut"), d.outputs, S.selected.output, "— не выводить —");
+  fillSelect($("#selMon"), d.outputs.filter(o => !/cable/i.test(o.name)), S.selected.monitor, "По умолчанию");
+  $("#monSw").checked = S.monitor_on;
+  $("#monVol").value = Math.round(S.monitor_volume * 100); setFill($("#monVol"));
+  $("#monVolV").textContent = Math.round(S.monitor_volume * 100) + "%";
+  $("#am8Tag").style.display = S.am8_found ? "" : "none";
+  $("#inHint").textContent = S.am8_found ? "FIFINE AM8 найден и выбран автоматически" : "AM8 не найден — выберите микрофон вручную";
+  $("#inHint").className = "hint" + (S.am8_found ? "" : " bad");
+  const cableOk = S.vbcable_found;
+  $("#outHint").textContent = cableOk ? "В Discord и играх выберите «CABLE Output»" : "VB-Cable не установлен — см. «Подключение»";
+  $("#outHint").className = "hint" + (cableOk ? "" : " bad");
+  $("#cableBanner").classList.toggle("show", !cableOk);
+  $("#setupDot").classList.toggle("show", !cableOk || !S.am8_found);
+  $("#stCable").className = "card step " + (cableOk ? "ok" : "need");
+  $("#stMic").className = "card step " + (S.am8_found ? "ok" : "need");
+  $("#stMicBadge").textContent = S.am8_found ? "✓ AM8 найден" : "не найден";
+  $("#stMicBadge").className = "badge " + (S.am8_found ? "good" : "warn");
+  const mb = $("#micBadge");
+  mb.textContent = S.am8_found ? "● FIFINE AM8" : "● Микрофон: " + (S.selected.input || "нет");
+  mb.className = "badge " + (S.am8_found ? "good" : "warn");
+}
+
+function setRunning(on, latency) {
+  running = on;
+  $("#powerCard").classList.toggle("on", on);
+  $("#pwrLbl").textContent = on ? "ВЫКЛ" : "ВКЛ";
+  $("#status").innerHTML = on ? '<span class="g">Микрофон улучшен</span>' : "Выключено";
+  $("#statusSub").textContent = on ? "Голос обрабатывается в реальном времени" : "Нажмите, чтобы улучшить микрофон";
+  if (!on) { $("#lat").textContent = "—"; $("#cpu").textContent = "—"; }
+  else if (latency) $("#lat").textContent = latency + " мс";
+}
+
+async function toggle() {
+  const btn = $("#pwrBtn");
+  btn.disabled = true;
+  const r = running ? await api("stop") : await api("start");
+  btn.disabled = false;
+  if (!r) return;
+  if (!r.ok) { toast(r.error || "Не удалось запустить", "err"); return; }
+  setRunning(!running, r.latency_ms);
+  toast(running ? "Микрофон улучшен — говорите!" : "Обработка выключена", running ? "ok" : "warn");
+}
+$("#pwrBtn").addEventListener("click", toggle);
+
+async function afterRestart(r) {
+  if (r && r.ok === false) toast(r.error, "err");
+  else if (r && r.latency_ms) $("#lat").textContent = r.latency_ms + " мс";
+}
+$("#selIn").addEventListener("change", e => api("set_device", "input", e.target.value).then(afterRestart));
+$("#selOut").addEventListener("change", e => api("set_device", "output", e.target.value || null).then(afterRestart));
+$("#selMon").addEventListener("change", e => api("set_device", "monitor", e.target.value || null).then(afterRestart));
+$("#monSw").addEventListener("change", e => api("set_monitor", e.target.checked, $("#monVol").value / 100).then(afterRestart));
+$("#monVol").addEventListener("input", e => {
+  setFill(e.target); $("#monVolV").textContent = e.target.value + "%";
+  clearTimeout(pending.mon); pending.mon = setTimeout(() => api("set_monitor", $("#monSw").checked, e.target.value / 100), 60);
+});
+$("#llSw").addEventListener("change", e => api("set_low_latency", e.target.checked).then(afterRestart));
+$("#autoSw").addEventListener("change", async e => {
+  const r = await api("set_autostart", e.target.checked);
+  e.target.checked = !!r;
+  toast(r ? "MicPro будет запускаться с Windows" : "Автозапуск выключен", r ? "ok" : "warn");
+});
+$("#refreshBtn").addEventListener("click", async () => {
+  await api("refresh_devices");
+  S = await api("get_state");
+  renderDevices();
+  toast("Список устройств обновлён");
+});
+
+// A/B: удерживайте кнопку, чтобы услышать оригинал
+const ab = $("#abBtn");
+const abOn = () => { ab.classList.add("pressed"); api("set_bypass", true); };
+const abOff = () => { if (ab.classList.contains("pressed")) { ab.classList.remove("pressed"); api("set_bypass", false); } };
+ab.addEventListener("mousedown", abOn);
+["mouseup", "mouseleave"].forEach(e => ab.addEventListener(e, abOff));
+
+/* анализатор */
+const canvas = $("#spec");
+function drawSpectrum() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  // сетка частот
+  ctx.strokeStyle = "rgba(255,255,255,.05)"; ctx.fillStyle = "#565d73"; ctx.font = "11px Inter, Segoe UI";
+  const fx = f => Math.log(f / 60) / Math.log(16000 / 60) * w;
+  for (const [f, l] of [[100, "100"], [300, "300"], [1000, "1k"], [3000, "3k"], [10000, "10k"]]) {
+    const x = fx(f); ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h - 16); ctx.stroke(); ctx.fillText(l, x + 4, h - 3);
+  }
+  for (let i = 0; i < 48; i++) {
+    dispIn[i] += (specIn[i] - dispIn[i]) * (specIn[i] > dispIn[i] ? .6 : .18);
+    dispOut[i] += (specOut[i] - dispOut[i]) * (specOut[i] > dispOut[i] ? .6 : .18);
+  }
+  const H = h - 20;
+  const path = arr => {
+    const p = new Path2D(), n = arr.length;
+    arr.forEach((v, i) => {
+      const x = i / (n - 1) * w, y = H - v * H + 2;
+      if (!i) p.moveTo(x, y); else { const px = (i - 1) / (n - 1) * w, py = H - arr[i - 1] * H + 2, mx = (px + x) / 2; p.bezierCurveTo(mx, py, mx, y, x, y); }
+    });
+    return p;
+  };
+  const pin = path(dispIn);
+  ctx.strokeStyle = "rgba(120,128,155,.55)"; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]); ctx.stroke(pin); ctx.setLineDash([]);
+  const pout = path(dispOut), fill = new Path2D(pout);
+  fill.lineTo(w, H + 2); fill.lineTo(0, H + 2); fill.closePath();
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, "rgba(90,140,255,.45)"); g.addColorStop(1, "rgba(90,140,255,0)");
+  ctx.fillStyle = g; ctx.fill(fill);
+  const lg = ctx.createLinearGradient(0, 0, w, 0);
+  lg.addColorStop(0, "#19e3ff"); lg.addColorStop(.5, "#6a7bff"); lg.addColorStop(1, "#b04dff");
+  ctx.strokeStyle = lg; ctx.lineWidth = 2.2; ctx.shadowColor = "rgba(90,140,255,.7)"; ctx.shadowBlur = 10; ctx.stroke(pout); ctx.shadowBlur = 0;
+}
+function frame() {
+  if (!document.hidden) drawSpectrum();
+  requestAnimationFrame(frame);
+}
+
+const meterPct = db => Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+async function poll() {
+  const hidden = document.hidden;
+  const p = await api("poll");
+  if (p) {
+    if (p.running !== running) setRunning(p.running, p.latency_ms);
+    if (p.running) {
+      $("#cpu").textContent = (p.cpu < 1 ? "<1" : Math.round(p.cpu)) + "%";
+      $("#lat").textContent = p.latency_ms + " мс";
+      $("#mIn").style.height = meterPct(p.in_db) + "%"; $("#vIn").textContent = Math.max(-60, Math.round(p.in_db));
+      $("#mOut").style.height = meterPct(p.out_db) + "%"; $("#vOut").textContent = Math.max(-60, Math.round(p.out_db));
+      $("#fxNoise").textContent = "−" + Math.round(p.denoise_db) + " дБ";
+      $("#fxGateLed").className = "led" + (p.gate_open ? " on" : "");
+      $("#fxGate").textContent = p.gate_open ? "открыт" : "тишина";
+      $("#fxComp").textContent = p.comp_db > .2 ? "−" + p.comp_db.toFixed(1) + " дБ" : "0 дБ";
+      $("#fxDeess").textContent = p.deess_db > .2 ? "−" + p.deess_db.toFixed(1) + " дБ" : "0 дБ";
+      $("#fxLim").textContent = p.limit_db > .2 ? "−" + p.limit_db.toFixed(1) + " дБ" : "0 дБ";
+      if (p.spec_in) { p.spec_in.forEach((v, i) => specIn[i] = v); p.spec_out.forEach((v, i) => specOut[i] = v); }
+    } else {
+      specIn.fill(0); specOut.fill(0);
+      $("#mIn").style.height = $("#mOut").style.height = "0%";
+    }
+  }
+  // свёрнуто — опрашиваем редко, чтобы не тратить процессор
+  setTimeout(poll, hidden ? 1000 : 50);
+}
+document.addEventListener("visibilitychange", () => {
+  document.body.classList.toggle("idle", document.hidden);
+  api("set_visible", !document.hidden);
+});
+
+async function start() {
+  S = await api("get_state");
+  $("#verBadge").textContent = "v" + S.version;
+  $("#llSw").checked = S.low_latency;
+  $("#autoSw").checked = S.autostart;
+  renderDevices(); renderPresets(); renderMods();
+  setRunning(S.running);
+  if (!S.running && S.was_running && S.selected.input && (S.selected.output || S.monitor_on)) {
+    const r = await api("start");
+    if (r && r.ok) setRunning(true, r.latency_ms);
+  }
+  poll(); frame();
+}
+
+/* Демо-режим: страница открыта в обычном браузере */
+const Mock = (() => {
+  const settings = { highpass: true, highpass_hz: 90, denoise: true, denoise_db: 22, gate: true, gate_db: -50, eq: true, warmth_db: 2.5, mud_db: -3.5, presence_db: 4.5, air_db: 3, deess: true, deess_db: 7, comp: true, comp_amount: 65, output_db: 1, limiter: true, ceiling_db: -1, bypass: false };
+  let on = false, t = 0;
+  const shape = i => { const f = 60 * Math.pow(16000 / 60, i / 47); return Math.exp(-Math.pow(Math.log(f / 450) / 1.25, 2)); };
+  return {
+    get_state: () => ({ version: "1.0.0", devices: {
+        inputs: [{ id: 1, name: "Микрофон (FIFINE AM8 Microphone)" }, { id: 2, name: "Микрофон (Realtek High Definition Audio)" }],
+        outputs: [{ id: 3, name: "CABLE Input (VB-Audio Virtual Cable)" }, { id: 4, name: "Наушники (FIFINE AM8 Microphone)" }, { id: 5, name: "Динамики (Realtek High Definition Audio)" }] },
+      selected: { input: "Микрофон (FIFINE AM8 Microphone)", output: "CABLE Input (VB-Audio Virtual Cable)", monitor: null },
+      monitor_on: false, monitor_volume: .8, am8_found: true, vbcable_found: true, settings, presets: ["stream", "discord", "podcast", "natural"],
+      preset: "stream", low_latency: false, autostart: true, running: false, was_running: true }),
+    start: () => { on = true; return { ok: true, latency_ms: 24 }; },
+    stop: () => { on = false; return { ok: true }; },
+    poll: () => {
+      t++;
+      if (!on) return { running: false };
+      const talk = Math.max(0, Math.sin(t / 9)) * (0.8 + 0.2 * Math.sin(t / 2.3));
+      const spec_in = [], spec_out = [];
+      for (let i = 0; i < 48; i++) {
+        const noise = .22 + .04 * Math.random() - i * .002;
+        const voice = shape(i) * talk * (.75 + .1 * Math.random()) + (i > 30 ? .12 * talk : 0);
+        spec_in.push(Math.max(noise, voice));
+        spec_out.push(Math.max(.03, talk > .1 ? voice * (1 + (i > 28 && i < 40 ? .18 : 0)) + .05 : .03));
+      }
+      return { running: true, latency_ms: 24, cpu: .6, in_db: talk > .1 ? -22 + talk * 8 : -52, out_db: talk > .1 ? -9 + talk * 5 : -80,
+        gate_open: talk > .1, denoise_db: 17, comp_db: talk * 5.2, deess_db: talk > .6 ? 2.1 : 0, limit_db: 0, spec_in, spec_out };
+    },
+    apply_preset: () => settings, set_param: (k, v) => { settings[k] = v; }, set_bypass: () => null, set_device: () => null, set_monitor: () => null,
+    set_low_latency: () => null, set_autostart: v => v, refresh_devices: () => null, set_visible: () => null, open_url: () => null,
+    open_sound_settings: () => null, minimize: () => null, close: () => null,
+  };
+})();
+
+const IN_APP = document.documentElement.hasAttribute("data-app");
+if (window.pywebview && window.pywebview.api) start();
+else if (IN_APP) window.addEventListener("pywebviewready", start, { once: true });
+else start();
+</script>
+</body>
+</html>

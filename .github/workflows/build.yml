@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install psutil pytest
+      - run: pip install psutil pytest numpy scipy
       - run: python -m pytest -q
 
   windows-exe:
@@ -37,12 +37,20 @@ jobs:
         run: >
           python -m PyInstaller --noconfirm --onefile --windowed --uac-admin
           --name FPSBooster --add-data "fps_booster/ui;fps_booster/ui" run.py
+      - name: Build MicPro exe
+        run: >
+          python -m PyInstaller --noconfirm --onefile --windowed
+          --name MicPro --add-data "mic_booster/ui;mic_booster/ui" run_mic.py
       - name: Smoke test (CLI)
-        run: python -m fps_booster --list --no-admin
+        run: |
+          python -m fps_booster --list --no-admin
+          python -c "from mic_booster.api import Api; print(Api().get_state()['devices'])"
       - uses: actions/upload-artifact@v4
         with:
-          name: FPSBooster
-          path: dist/FPSBooster.exe
+          name: apps
+          path: |
+            dist/FPSBooster.exe
+            dist/MicPro.exe
       - name: Release
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
@@ -53,6 +61,9 @@ jobs:
           target_commitish: ${{ github.sha }}
           make_latest: true
           body: |
-            Скачайте **FPSBooster.exe**, запустите и подтвердите запрос прав администратора.
-            Windows 10/11. Всё откатывается кнопкой «Откатить всё».
-          files: dist/FPSBooster.exe
+            **FPSBooster.exe** — больше FPS в CS2 и Dota 2 без потери качества (запросит права администратора).
+            **MicPro.exe** — студийный звук для микрофона (FIFINE AM8 и любых других). Нужен бесплатный VB-Cable.
+            Windows 10/11.
+          files: |
+            dist/FPSBooster.exe
+            dist/MicPro.exe

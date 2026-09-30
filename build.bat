@@ -7,8 +7,12 @@ python -m PyInstaller --noconfirm --onefile --windowed --uac-admin ^
   --name FPSBooster ^
   --add-data "fps_booster/ui;fps_booster/ui" ^
   run.py || goto :error
+python -m PyInstaller --noconfirm --onefile --windowed ^
+  --name MicPro ^
+  --add-data "mic_booster/ui;mic_booster/ui" ^
+  run_mic.py || goto :error
 echo.
-echo Готово: dist\FPSBooster.exe
+echo Готово: dist\FPSBooster.exe и dist\MicPro.exe
 pause
 exit /b 0
 :error
