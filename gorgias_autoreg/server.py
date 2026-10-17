@@ -327,11 +327,19 @@ def _parse_proxy_for_capsolver(proxy_url: str) -> dict:
 
 GORGIAS_SIGNUP_URL = "https://www.gorgias.com/api/users"
 GORGIAS_SIGNUP_ALT = [
+    "https://www.gorgias.com/api/users/",
     "https://www.gorgias.com/api/accounts",
+    "https://www.gorgias.com/api/accounts/",
+    "https://www.gorgias.com/api/v1/users",
+    "https://www.gorgias.com/api/v2/users",
+    "https://www.gorgias.com/api/auth/register",
+    "https://www.gorgias.com/api/auth/signup",
+    "https://www.gorgias.com/api/registrations",
     "https://api.gorgias.com/api/users",
     "https://www.gorgias.com/users",
+    "https://www.gorgias.com/api/user/create",
 ]
-GORGIAS_SIGNUP_PAGE = "https://www.gorgias.com/get-started"
+GORGIAS_SIGNUP_PAGE = "https://www.gorgias.com/free-trial"
 GORGIAS_RECAPTCHA_SITEKEY = "6LfsAKcUAAAAAHXmT_pBQLhGEfxX8R6bkFyl2bGP"
 
 USER_AGENTS = [
@@ -448,17 +456,22 @@ def _try_signup(sess: http.Session, email: str, password: str,
 
     endpoints = [GORGIAS_SIGNUP_URL] + GORGIAS_SIGNUP_ALT
 
+    # Also try form-urlencoded format for the flat payload
+    flat_payload = payloads[0]
+
     for endpoint in endpoints:
-        for payload in payloads:
+        # Try JSON first, then form-urlencoded
+        attempts = [
+            ("json",  {"json": flat_payload,    "headers": {"Content-Type": "application/json",
+                                                              "X-Requested-With": "XMLHttpRequest"}}),
+            ("form",  {"data": flat_payload,    "headers": {"Content-Type": "application/x-www-form-urlencoded",
+                                                              "X-Requested-With": "XMLHttpRequest"}}),
+        ]
+        for fmt, kwargs in attempts:
             try:
-                log(f"POST {endpoint}", "info", lq)
-                r = sess.post(
-                    endpoint,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                    timeout=25,
-                )
-                log(f"  → {r.status_code}", "info", lq)
+                log(f"POST {endpoint} [{fmt}]", "info", lq)
+                r = sess.post(endpoint, timeout=25, **kwargs)
+                log(f"  → {r.status_code}  body: {r.text[:300]}", "info", lq)
                 if r.status_code in (200, 201, 202):
                     try:
                         data = r.json()
@@ -478,13 +491,8 @@ def _try_signup(sess: http.Session, email: str, password: str,
                         return {"ok": False, "error": f"email_taken:{email}"}
                     log(f"  Validation error: {err_str[:200]}", "warn", lq)
                 elif r.status_code == 404:
-                    log(f"  Endpoint not found, trying next...", "warn", lq)
-                    break
-                elif r.status_code == 400:
-                    try:
-                        log(f"  Bad request: {r.json()}", "warn", lq)
-                    except Exception:
-                        log(f"  Bad request: {r.text[:200]}", "warn", lq)
+                    log(f"  Not found", "warn", lq)
+                    break  # try next endpoint
                 elif r.status_code in (429, 503):
                     log(f"  Rate limited, waiting...", "warn", lq)
                     time.sleep(10)
