@@ -327,6 +327,50 @@ def solve_recaptcha_v3(sitekey: str, page_url: str, action: str = "signup",
             log_fn(f"solve_recaptcha_v3 error: {e}", "error")
     return None
 
+def solve_turnstile(sitekey: str, page_url: str, proxy: str | None = None,
+                    log_fn=None) -> str | None:
+    """Solve Cloudflare Turnstile via CapSolver."""
+    key = _captcha.get("key", "")
+    if not key:
+        return None
+    def _log(msg):
+        if log_fn:
+            log_fn(msg, "info")
+    try:
+        payload = {
+            "clientKey": key,
+            "task": {
+                "type": "AntiTurnstileTaskProxyLess",
+                "websiteURL": page_url,
+                "websiteKey": sitekey,
+            }
+        }
+        _log(f"CapSolver Turnstile sitekey={sitekey[:20]}...")
+        r = http.post(f"{CAPSOLVER_URL}/createTask", json=payload, timeout=30, verify=False)
+        resp = r.json()
+        tid = resp.get("taskId")
+        if not tid:
+            _log(f"CapSolver Turnstile createTask failed: {resp}")
+            return None
+        _log(f"CapSolver Turnstile task: {tid}")
+        for i in range(60):
+            time.sleep(3)
+            r2 = http.post(f"{CAPSOLVER_URL}/getTaskResult",
+                           json={"clientKey": key, "taskId": tid}, timeout=20, verify=False)
+            d = r2.json()
+            if d.get("status") == "ready":
+                _log("Turnstile solved OK")
+                return d["solution"].get("token") or d["solution"].get("cf_clearance")
+            if d.get("errorCode"):
+                _log(f"Turnstile error: {d.get('errorDescription', d.get('errorCode'))}")
+                return None
+            if i % 5 == 4:
+                _log(f"Turnstile polling... ({(i+1)*3}s)")
+    except Exception as e:
+        if log_fn:
+            log_fn(f"solve_turnstile error: {e}", "error")
+    return None
+
 def _parse_proxy_for_capsolver(proxy_url: str) -> dict:
     try:
         import urllib.parse
@@ -465,8 +509,19 @@ def _try_signup(sess: http.Session, email: str, password: str,
         )
         page = ctx.new_page()
 
-        # Track API responses for debugging
+        # Track API requests AND responses for debugging
         api_responses = []
+        api_request_bodies = []
+
+        def _on_request(req):
+            url = req.url
+            if any(x in url for x in ["user/init", "user/submit", "user/validation"]):
+                try:
+                    body = req.post_data or ""
+                except Exception:
+                    body = ""
+                api_request_bodies.append({"url": url, "method": req.method, "body": body[:1000]})
+                log(f"  REQ → {url.split('/')[-1]} ({req.method}) body_len={len(body)}", "info", lq)
 
         def _on_response(resp):
             url = resp.url
@@ -476,8 +531,9 @@ def _try_signup(sess: http.Session, email: str, password: str,
                 except Exception:
                     body = ""
                 api_responses.append({"url": url, "status": resp.status, "body": body})
-                log(f"  API: {url.split('/')[-1]} → {resp.status}", "info", lq)
+                log(f"  RSP ← {url.split('/')[-1]} → {resp.status} {body[:150]}", "info", lq)
 
+        page.on("request", _on_request)
         page.on("response", _on_response)
 
         log("Navigating to gorgias.com/signup ...", "info", lq)
@@ -514,6 +570,40 @@ def _try_signup(sess: http.Session, email: str, password: str,
                     break
                 log(f"Failed with action={action}, trying next...", "warn", lq)
 
+        # Detect Turnstile sitekey from the page
+        turnstile_sitekey = page.evaluate("""() => {
+            const el = document.querySelector('[data-sitekey].cf-turnstile, .cf-turnstile[data-sitekey]');
+            if (el) return el.getAttribute('data-sitekey');
+            const divs = document.querySelectorAll('div[data-sitekey]');
+            for (const d of divs) {
+                if (d.className && d.className.includes('turnstile')) return d.getAttribute('data-sitekey');
+            }
+            const scripts = document.querySelectorAll('script[src*="turnstile"]');
+            if (scripts.length > 0) {
+                const allSitekeys = document.querySelectorAll('[data-sitekey]');
+                for (const el of allSitekeys) {
+                    const sk = el.getAttribute('data-sitekey');
+                    if (sk && !sk.startsWith('6L')) return sk;
+                }
+            }
+            return null;
+        }""")
+        if turnstile_sitekey:
+            log(f"Cloudflare Turnstile detected: sitekey={turnstile_sitekey}", "info", lq)
+
+        # Solve Turnstile if present
+        turnstile_token = None
+        if turnstile_sitekey and _captcha.get("key"):
+            log("Solving Cloudflare Turnstile...", "info", lq)
+            turnstile_token = solve_turnstile(
+                turnstile_sitekey, GORGIAS_SIGNUP_PAGE, proxy=proxy,
+                log_fn=lambda msg, lvl="info": log(msg, lvl, lq),
+            )
+            if turnstile_token:
+                log("Turnstile solved!", "ok", lq)
+            else:
+                log("Turnstile solve failed, continuing without", "warn", lq)
+
         # Fill form fields (exact names from page inspection)
         page.wait_for_selector('input[name="email"]', timeout=10000)
         page.fill('input[name="email"]', email)
@@ -522,31 +612,45 @@ def _try_signup(sess: http.Session, email: str, password: str,
         page.fill('input[name="company_domain"]', website_url)
         log(f"Filled company_domain: {website_url}", "info", lq)
 
-        # Inject reCAPTCHA token
-        if captcha_token:
-            log("Injecting reCAPTCHA token...", "info", lq)
-            page.evaluate("""(token) => {
-                // Set the hidden textarea
-                const ta = document.querySelector('textarea[name="g-recaptcha-response"]');
-                if (ta) ta.value = token;
-                // Also try all recaptcha textareas
-                document.querySelectorAll('textarea[id*="recaptcha"]').forEach(el => {
-                    el.value = token;
-                });
-                // Override grecaptcha.execute for any future calls
-                if (window.grecaptcha) {
-                    window.grecaptcha.execute = function() {
-                        return Promise.resolve(token);
-                    };
-                    if (window.grecaptcha.enterprise) {
-                        window.grecaptcha.enterprise.execute = function() {
-                            return Promise.resolve(token);
+        # Inject reCAPTCHA token AND Turnstile token
+        if captcha_token or turnstile_token:
+            log("Injecting captcha tokens...", "info", lq)
+            page.evaluate("""(tokens) => {
+                const [recaptchaToken, turnstileToken] = tokens;
+                // reCAPTCHA: set hidden textarea
+                if (recaptchaToken) {
+                    const ta = document.querySelector('textarea[name="g-recaptcha-response"]');
+                    if (ta) ta.value = recaptchaToken;
+                    document.querySelectorAll('textarea[id*="recaptcha"]').forEach(el => {
+                        el.value = recaptchaToken;
+                    });
+                    // Override grecaptcha.execute for form JS
+                    if (window.grecaptcha) {
+                        window.grecaptcha.execute = function() {
+                            return Promise.resolve(recaptchaToken);
                         };
+                        if (window.grecaptcha.enterprise) {
+                            window.grecaptcha.enterprise.execute = function() {
+                                return Promise.resolve(recaptchaToken);
+                            };
+                        }
                     }
                 }
-            }""", captcha_token)
+                // Turnstile: set hidden input
+                if (turnstileToken) {
+                    const cf = document.querySelector('input[name="cf-turnstile-response"]');
+                    if (cf) cf.value = turnstileToken;
+                    document.querySelectorAll('[name="cf-turnstile-response"]').forEach(el => {
+                        el.value = turnstileToken;
+                    });
+                    // Override turnstile callbacks
+                    if (window.turnstile) {
+                        window.turnstile.getResponse = function() { return turnstileToken; };
+                    }
+                }
+            }""", [captcha_token or "", turnstile_token or ""])
         else:
-            log("No captcha token available, submitting without it", "warn", lq)
+            log("No captcha tokens available, submitting without", "warn", lq)
 
         # Click submit — it's input[type="submit"]#signup-button
         submit = page.query_selector('input#signup-button') or \
@@ -566,9 +670,11 @@ def _try_signup(sess: http.Session, email: str, password: str,
         final_url = page.url
         log(f"Post-submit URL: {final_url}", "info", lq)
 
-        # Log any API responses captured
+        # Log API request bodies (to see what was actually submitted)
+        for req in api_request_bodies:
+            log(f"  Sent to {req['url'].split('/')[-1]}: {req['body'][:300]}", "info", lq)
         for resp in api_responses:
-            log(f"  Captured: {resp['url'].split('/')[-1]} → {resp['status']} {resp['body'][:150]}", "info", lq)
+            log(f"  Got from {resp['url'].split('/')[-1]}: {resp['status']} {resp['body'][:200]}", "info", lq)
 
         # Check for errors on page
         error_text = page.evaluate("""() => {
