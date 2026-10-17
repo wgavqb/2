@@ -325,17 +325,16 @@ def _parse_proxy_for_capsolver(proxy_url: str) -> dict:
 
 # ── Gorgias signup / login / API key ──────────────────────────────────────────
 
-GORGIAS_SIGNUP_URL = "https://app.gorgias.com/api/users"
+GORGIAS_SIGNUP_URL = "https://gorgias.com/api/accounts"
 GORGIAS_SIGNUP_ALT = [
+    "https://gorgias.com/api/users",
+    "https://gorgias.com/api/signup",
+    "https://gorgias.com/api/registrations",
     "https://app.gorgias.com/api/accounts",
-    "https://app.gorgias.com/users",
-    "https://app.gorgias.com/api/v0/users",
-    "https://app.gorgias.com/api/v1/users",
-    "https://app.gorgias.com/users/sign_up",
-    "https://app.gorgias.com/api/auth/register",
-    "https://app.gorgias.com/api/registrations",
+    "https://app.gorgias.com/api/users",
+    "https://app.gorgias.com/api/signup",
 ]
-GORGIAS_SIGNUP_PAGE = "https://app.gorgias.com"
+GORGIAS_SIGNUP_PAGE = "https://gorgias.com/signup"
 GORGIAS_RECAPTCHA_SITEKEY = ""
 
 USER_AGENTS = [
@@ -413,56 +412,28 @@ def _try_signup(sess: http.Session, email: str, password: str,
         else:
             log("reCAPTCHA solve failed, trying without token", "warn", lq)
 
+    # Gorgias signup form: only email + website URL on step 1
+    # subdomain and name are set up later via confirmation link
+    website_url = f"https://{subdomain}.com"
     payloads = [
-        {
-            "email": email,
-            "password": password,
-            "first_name": first,
-            "last_name": last,
-            "company": company,
-            "subdomain": subdomain,
-            **({
-                "g-recaptcha-response": recaptcha_token} if recaptcha_token else {}),
-        },
-        {
-            "email": email,
-            "password": password,
-            "firstName": first,
-            "lastName": last,
-            "companyName": company,
-            "shopName": subdomain,
-            **({
-                "recaptchaToken": recaptcha_token} if recaptcha_token else {}),
-        },
-        {
-            "user": {
-                "email": email,
-                "password": password,
-                "first_name": first,
-                "last_name": last,
-            },
-            "account": {
-                "name": company,
-                "subdomain": subdomain,
-            },
-            **({
-                "recaptcha": recaptcha_token} if recaptcha_token else {}),
-        },
+        # step-1 form fields (what the /signup form actually sends)
+        {"email": email, "url": website_url},
+        {"email": email, "website": website_url},
+        {"email": email, "website_url": website_url},
+        {"email": email, "shop_url": website_url},
+        # full payload fallback (in case they accept it all at once)
+        {"email": email, "url": website_url, "first_name": first, "last_name": last,
+         "name": company, "subdomain": subdomain, "password": password},
     ]
 
     endpoints = [GORGIAS_SIGNUP_URL] + GORGIAS_SIGNUP_ALT
 
-    # Also try form-urlencoded format for the flat payload
-    flat_payload = payloads[0]
+    hdrs = {"Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": "https://gorgias.com/signup"}
 
     for endpoint in endpoints:
-        # Try JSON first, then form-urlencoded
-        attempts = [
-            ("json",  {"json": flat_payload,    "headers": {"Content-Type": "application/json",
-                                                              "X-Requested-With": "XMLHttpRequest"}}),
-            ("form",  {"data": flat_payload,    "headers": {"Content-Type": "application/x-www-form-urlencoded",
-                                                              "X-Requested-With": "XMLHttpRequest"}}),
-        ]
+        attempts = [("json", {"json": p, "headers": hdrs}) for p in payloads[:3]]
         for fmt, kwargs in attempts:
             try:
                 log(f"POST {endpoint} [{fmt}]", "info", lq)
