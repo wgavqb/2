@@ -653,80 +653,84 @@ def _try_signup(sess: http.Session, email: str, password: str,
         else:
             log("No captcha tokens available, submitting without", "warn", lq)
 
-        # Wait for Turnstile to complete (it disables the submit button)
-        log("Waiting for Turnstile challenge to complete...", "info", lq)
-        turnstile_done = False
-        for _ in range(15):
-            cf_val = page.evaluate("""() => {
-                const el = document.querySelector('input[name="cf-turnstile-response"]');
-                return el ? el.value : '';
-            }""")
-            if cf_val:
-                log(f"Turnstile auto-solved (token len={len(cf_val)})", "ok", lq)
-                turnstile_done = True
-                break
-            time.sleep(1)
+        # Instead of clicking submit (which requires Turnstile),
+        # call user/submit directly via fetch() from the page context.
+        # We already have the session (cookies from user/init) and reCAPTCHA token.
+        log("Calling user/submit directly via page fetch...", "info", lq)
 
-        if not turnstile_done:
-            log("Turnstile not auto-solved, force-enabling submit button", "warn", lq)
-
-        # Force-enable the submit button (it's disabled until Turnstile completes)
-        page.evaluate("""() => {
-            const btn = document.querySelector('input#signup-button') ||
-                        document.querySelector('input[type="submit"]');
-            if (btn) {
-                btn.disabled = false;
-                btn.removeAttribute('disabled');
-            }
+        # Collect all form fields
+        form_data = page.evaluate("""() => {
+            const fields = {};
+            document.querySelectorAll('#signup-form input, #signup-form textarea, #signup-form select, form input, form textarea').forEach(el => {
+                if (el.name) fields[el.name] = el.value || '';
+            });
+            return fields;
         }""")
+        log(f"Form fields: {json.dumps({k: v[:30] for k, v in form_data.items()})}", "info", lq)
 
-        # Click submit
-        submit = page.query_selector('input#signup-button') or \
-                 page.query_selector('input[type="submit"]') or \
-                 page.query_selector('button:has-text("Create my account")')
-        if not submit:
-            log("Submit button not found!", "error", lq)
-            browser.close()
-            pw_ctx.stop()
-            return {"ok": False, "error": "submit_button_not_found"}
+        # Override with our solved tokens
+        if captcha_token:
+            form_data["g-recaptcha-response"] = captcha_token
+        # Get Turnstile token from page if it auto-solved
+        cf_val = page.evaluate("""() => {
+            const el = document.querySelector('input[name="cf-turnstile-response"]');
+            return el ? el.value : '';
+        }""")
+        if cf_val:
+            form_data["cf-turnstile-response"] = cf_val
+            log(f"Using page Turnstile token (len={len(cf_val)})", "ok", lq)
+        elif turnstile_token:
+            form_data["cf-turnstile-response"] = turnstile_token
+            log("Using CapSolver Turnstile token", "ok", lq)
 
-        log("Clicking 'Create my account'...", "info", lq)
-        submit.click(timeout=10000)
+        # Make the submit call from within the page (preserves cookies/session)
+        submit_result = page.evaluate("""(formData) => {
+            return fetch('/signup/user/submit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(formData),
+                credentials: 'same-origin'
+            }).then(r => r.text().then(body => ({status: r.status, body: body, url: r.url})))
+              .catch(e => ({status: 0, body: e.toString(), url: ''}));
+        }""", form_data)
 
-        # Wait for either navigation or XHR response
-        time.sleep(8)
+        log(f"user/submit → {submit_result.get('status')} {submit_result.get('body', '')[:300]}", "info", lq)
+
+        if submit_result.get("status") in (200, 201, 202):
+            log("Signup submitted successfully!", "ok", lq)
+            # Check for redirect in response
+            try:
+                resp_data = json.loads(submit_result.get("body", "{}"))
+                redirect_url = resp_data.get("redirect_url") or resp_data.get("redirect") or ""
+                if redirect_url:
+                    log(f"Redirect URL: {redirect_url}", "ok", lq)
+                    page.goto(redirect_url, wait_until="domcontentloaded", timeout=20000)
+            except Exception:
+                pass
+            time.sleep(3)
+        else:
+            # Try submitting as form-encoded instead of JSON
+            log("JSON submit failed, trying form-encoded...", "warn", lq)
+            submit_result2 = page.evaluate("""(formData) => {
+                const params = new URLSearchParams(formData).toString();
+                return fetch('/signup/user/submit', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: params,
+                    credentials: 'same-origin'
+                }).then(r => r.text().then(body => ({status: r.status, body: body})))
+                  .catch(e => ({status: 0, body: e.toString()}));
+            }""", form_data)
+            log(f"form-encoded submit → {submit_result2.get('status')} {submit_result2.get('body', '')[:300]}", "info", lq)
+
+            if submit_result2.get("status") not in (200, 201, 202):
+                browser.close()
+                pw_ctx.stop()
+                return {"ok": False, "error": f"signup_failed: {submit_result.get('body', '')[:200]}"}
+            time.sleep(3)
+
         final_url = page.url
         log(f"Post-submit URL: {final_url}", "info", lq)
-
-        # Log API request bodies (to see what was actually submitted)
-        for req in api_request_bodies:
-            log(f"  Sent to {req['url'].split('/')[-1]}: {req['body'][:300]}", "info", lq)
-        for resp in api_responses:
-            log(f"  Got from {resp['url'].split('/')[-1]}: {resp['status']} {resp['body'][:200]}", "info", lq)
-
-        # Check for errors on page
-        error_text = page.evaluate("""() => {
-            const errs = document.querySelectorAll('[class*="error"], [class*="alert"], [role="alert"], .form-error, .field-error');
-            const texts = Array.from(errs).map(e => e.textContent.trim()).filter(t => t.length > 0 && t.length < 200);
-            return texts.join(' | ');
-        }""")
-
-        # Check if still on signup page
-        if "signup" in final_url:
-            if error_text:
-                log(f"Form error: {error_text}", "error", lq)
-
-            # Check if XHR-based submission succeeded (no page nav)
-            submit_ok = any(r.get("status") in (200, 201, 202) and "submit" in r.get("url", "")
-                           for r in api_responses)
-            if not submit_ok:
-                # Try waiting a bit more — maybe slow redirect
-                time.sleep(5)
-                final_url = page.url
-                if "signup" in final_url:
-                    browser.close()
-                    pw_ctx.stop()
-                    return {"ok": False, "error": f"signup_failed: {error_text or api_responses}"}
 
         # Extract subdomain from redirect URL
         real_subdomain = None
