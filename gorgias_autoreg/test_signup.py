@@ -58,8 +58,22 @@ def main():
         page.on("response", on_response)
 
         print("[1] Loading gorgias.com/signup ...")
-        page.goto("https://gorgias.com/signup", wait_until="networkidle", timeout=40000)
+        page.goto("https://gorgias.com/signup", wait_until="domcontentloaded", timeout=40000)
+        time.sleep(3)
         print(f"    URL: {page.url}\n")
+
+        # Dismiss cookie consent popup (Axeptio)
+        print("[1.5] Dismissing cookie popup...")
+        for btn_text in ["OK!", "OK", "Accept", "Accept all", "No, thanks"]:
+            try:
+                btn = page.locator(f"text={btn_text}").first
+                if btn.is_visible(timeout=2000):
+                    btn.click()
+                    print(f"    Clicked '{btn_text}'")
+                    time.sleep(1)
+                    break
+            except:
+                pass
 
         # Detect reCAPTCHA
         print("[2] Detecting reCAPTCHA configuration...")
