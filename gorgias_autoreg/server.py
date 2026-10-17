@@ -325,22 +325,18 @@ def _parse_proxy_for_capsolver(proxy_url: str) -> dict:
 
 # ── Gorgias signup / login / API key ──────────────────────────────────────────
 
-GORGIAS_SIGNUP_URL = "https://www.gorgias.com/api/users"
+GORGIAS_SIGNUP_URL = "https://app.gorgias.com/api/users"
 GORGIAS_SIGNUP_ALT = [
-    "https://www.gorgias.com/api/users/",
-    "https://www.gorgias.com/api/accounts",
-    "https://www.gorgias.com/api/accounts/",
-    "https://www.gorgias.com/api/v1/users",
-    "https://www.gorgias.com/api/v2/users",
-    "https://www.gorgias.com/api/auth/register",
-    "https://www.gorgias.com/api/auth/signup",
-    "https://www.gorgias.com/api/registrations",
-    "https://api.gorgias.com/api/users",
-    "https://www.gorgias.com/users",
-    "https://www.gorgias.com/api/user/create",
+    "https://app.gorgias.com/api/accounts",
+    "https://app.gorgias.com/users",
+    "https://app.gorgias.com/api/v0/users",
+    "https://app.gorgias.com/api/v1/users",
+    "https://app.gorgias.com/users/sign_up",
+    "https://app.gorgias.com/api/auth/register",
+    "https://app.gorgias.com/api/registrations",
 ]
-GORGIAS_SIGNUP_PAGE = "https://www.gorgias.com/free-trial"
-GORGIAS_RECAPTCHA_SITEKEY = "6LfsAKcUAAAAAHXmT_pBQLhGEfxX8R6bkFyl2bGP"
+GORGIAS_SIGNUP_PAGE = "https://app.gorgias.com"
+GORGIAS_RECAPTCHA_SITEKEY = ""
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -406,7 +402,7 @@ def _try_signup(sess: http.Session, email: str, password: str,
     log(f"Attempting signup for {email} / subdomain={subdomain}", "info", lq)
 
     recaptcha_token = None
-    if _captcha.get("key"):
+    if _captcha.get("key") and GORGIAS_RECAPTCHA_SITEKEY:
         log("Solving reCAPTCHA v2...", "info", lq)
         recaptcha_token = solve_recaptcha_v2(
             GORGIAS_RECAPTCHA_SITEKEY, GORGIAS_SIGNUP_PAGE, proxy=proxy,
