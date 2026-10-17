@@ -276,35 +276,55 @@ def solve_recaptcha_v2(sitekey: str, page_url: str, proxy: str | None = None,
         pass
     return None
 
-def solve_recaptcha_v3(sitekey: str, page_url: str, action: str = "signup", proxy: str | None = None) -> str | None:
+def solve_recaptcha_v3(sitekey: str, page_url: str, action: str = "signup",
+                       proxy: str | None = None, enterprise: bool = False,
+                       log_fn=None) -> str | None:
     svc = _captcha.get("service", "capsolver")
     key = _captcha.get("key", "")
     if not key:
         return None
+    def _log(msg):
+        if log_fn:
+            log_fn(msg, "info")
     try:
         if svc == "capsolver":
+            if enterprise:
+                task_type = "ReCaptchaV3EnterpriseTaskProxyless"
+            else:
+                task_type = "ReCaptchaV3TaskProxyless"
             payload = {
                 "clientKey": key,
                 "task": {
-                    "type": "ReCaptchaV3TaskProxyless",
+                    "type": task_type,
                     "websiteURL": page_url,
                     "websiteKey": sitekey,
                     "pageAction": action,
-                    "minScore": 0.5,
+                    "minScore": 0.7,
                 }
             }
+            _log(f"CapSolver {task_type} sitekey={sitekey[:20]}... action={action}")
             r = http.post(f"{CAPSOLVER_URL}/createTask", json=payload, timeout=30, verify=False)
-            tid = r.json().get("taskId")
+            resp = r.json()
+            tid = resp.get("taskId")
             if not tid:
+                _log(f"CapSolver createTask failed: {resp}")
                 return None
-            for _ in range(60):
+            _log(f"CapSolver task: {tid}, polling...")
+            for i in range(60):
                 time.sleep(3)
                 r2 = http.post(f"{CAPSOLVER_URL}/getTaskResult", json={"clientKey": key, "taskId": tid}, timeout=20, verify=False)
                 d = r2.json()
                 if d.get("status") == "ready":
+                    _log("CapSolver solved OK")
                     return d["solution"]["gRecaptchaResponse"]
-    except Exception:
-        pass
+                if d.get("errorCode"):
+                    _log(f"CapSolver error: {d.get('errorDescription', d.get('errorCode'))}")
+                    return None
+                if i % 5 == 4:
+                    _log(f"CapSolver polling... ({(i+1)*3}s)")
+    except Exception as e:
+        if log_fn:
+            log_fn(f"solve_recaptcha_v3 error: {e}", "error")
     return None
 
 def _parse_proxy_for_capsolver(proxy_url: str) -> dict:
@@ -397,8 +417,11 @@ def _try_signup(sess: http.Session, email: str, password: str,
                 lq, proxy: str | None = None) -> dict:
     """
     Register on Gorgias using Playwright browser automation.
-    Gorgias signup uses single-use session tokens embedded in the page,
-    so plain HTTP POSTs always fail (405/403). A real browser is required.
+    1) Loads gorgias.com/signup in headless Chromium
+    2) Auto-detects reCAPTCHA sitekey & type (v3 vs Enterprise)
+    3) Solves via CapSolver with correct parameters
+    4) Injects token, fills form, submits
+    5) Captures redirect to get the auto-assigned subdomain
     Returns {"ok": True, "data": {...}, "subdomain": "xx"} or {"ok": False, "error": ...}
     """
     log(f"Attempting Playwright signup for {email}", "info", lq)
@@ -410,22 +433,16 @@ def _try_signup(sess: http.Session, email: str, password: str,
         return {"ok": False, "error": "playwright_not_installed"}
 
     website_url = f"https://{company.lower().replace(' ', '')}.com"
-    chromium_path = os.environ.get(
-        "CHROMIUM_PATH",
-        "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
-    )
-    if not os.path.isfile(chromium_path):
-        chromium_path = None
 
-    pw_context = None
+    pw_ctx = None
     browser = None
     try:
-        pw_context = sync_playwright().start()
-        launch_args = ["--no-sandbox", "--disable-dev-shm-usage",
-                       "--disable-blink-features=AutomationControlled"]
+        pw_ctx = sync_playwright().start()
+        launch_args = [
+            "--no-sandbox", "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+        ]
         launch_kw: dict = {"headless": True, "args": launch_args}
-        if chromium_path:
-            launch_kw["executable_path"] = chromium_path
 
         if proxy:
             parts = proxy.replace("://", "||").split("||", 1)
@@ -440,22 +457,103 @@ def _try_signup(sess: http.Session, email: str, password: str,
             launch_kw["proxy"] = proxy_cfg
 
         log("Launching headless Chromium...", "info", lq)
-        browser = pw_context.chromium.launch(**launch_kw)
+        browser = pw_ctx.chromium.launch(**launch_kw)
         ctx = browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/120.0.0.0 Safari/537.36",
+            user_agent=random.choice(USER_AGENTS),
             viewport={"width": 1280, "height": 800},
         )
         page = ctx.new_page()
 
+        # Collect info about reCAPTCHA from network requests
+        recaptcha_info = {"sitekey": None, "enterprise": False, "action": None}
+        captured_requests = []
+
+        def _on_request(req):
+            url = req.url
+            # Detect reCAPTCHA script loading
+            if "recaptcha" in url and ("api.js" in url or "enterprise.js" in url):
+                recaptcha_info["enterprise"] = "enterprise.js" in url
+                m = re.search(r'render=([^&]+)', url)
+                if m and m.group(1) != "explicit":
+                    recaptcha_info["sitekey"] = m.group(1)
+            # Capture signup API requests
+            if "user/" in url and req.method == "POST":
+                captured_requests.append({"url": url, "method": req.method})
+
+        def _on_response(resp):
+            url = resp.url
+            if "user/init" in url or "user/submit" in url:
+                try:
+                    captured_requests.append({
+                        "url": url, "status": resp.status,
+                        "body": resp.text()[:500] if resp.status < 500 else "",
+                    })
+                except Exception:
+                    pass
+
+        page.on("request", _on_request)
+        page.on("response", _on_response)
+
         log("Navigating to gorgias.com/signup ...", "info", lq)
-        page.goto(GORGIAS_SIGNUP_PAGE, wait_until="networkidle", timeout=30000)
+        page.goto(GORGIAS_SIGNUP_PAGE, wait_until="networkidle", timeout=40000)
         log(f"Page loaded: {page.url}", "info", lq)
+
+        # Extract reCAPTCHA sitekey from the page if not captured from network
+        if not recaptcha_info["sitekey"]:
+            sitekey = page.evaluate("""() => {
+                // Check grecaptcha config
+                if (window.___grecaptcha_cfg && window.___grecaptcha_cfg.clients) {
+                    for (const c of Object.values(window.___grecaptcha_cfg.clients)) {
+                        if (c && typeof c === 'object') {
+                            // walk the object tree looking for sitekey
+                            const json = JSON.stringify(c);
+                            const m = json.match(/"sitekey"\\s*:\\s*"([^"]+)"/);
+                            if (m) return m[1];
+                        }
+                    }
+                }
+                // Check data-sitekey attributes
+                const el = document.querySelector('[data-sitekey]');
+                if (el) return el.getAttribute('data-sitekey');
+                // Check script src render param
+                const scripts = document.querySelectorAll('script[src*="recaptcha"]');
+                for (const s of scripts) {
+                    const m = s.src.match(/render=([^&]+)/);
+                    if (m && m[1] !== 'explicit') return m[1];
+                }
+                return null;
+            }""")
+            if sitekey:
+                recaptcha_info["sitekey"] = sitekey
+
+        # Detect if enterprise
+        is_enterprise = recaptcha_info["enterprise"] or page.evaluate("""() => {
+            return !!(window.grecaptcha && window.grecaptcha.enterprise);
+        }""")
+
+        ent_label = "Enterprise" if is_enterprise else "v3"
+        log(f"reCAPTCHA detected: {ent_label}, sitekey={recaptcha_info['sitekey'] or 'NOT FOUND'}", "info", lq)
+
+        # Try to detect action from page JS
+        action = page.evaluate("""() => {
+            // Common patterns in Gorgias signup JS
+            const scripts = document.querySelectorAll('script');
+            for (const s of scripts) {
+                const text = s.textContent || '';
+                // Look for grecaptcha.execute(..., {action: '...'})
+                const m = text.match(/grecaptcha(?:\\.enterprise)?\\.execute\\([^,]+,\\s*\\{\\s*action:\\s*['"]([^'"]+)['"]/);
+                if (m) return m[1];
+            }
+            return null;
+        }""")
+        if action:
+            recaptcha_info["action"] = action
+            log(f"Detected reCAPTCHA action: {action}", "info", lq)
 
         # Fill email field
         email_sel = 'input[name="email"], input[type="email"], input[placeholder*="email" i]'
         page.wait_for_selector(email_sel, timeout=10000)
+        page.click(email_sel)
         page.fill(email_sel, email)
         log(f"Filled email: {email}", "info", lq)
 
@@ -469,28 +567,84 @@ def _try_signup(sess: http.Session, email: str, password: str,
             page.fill(url_sel, website_url)
             log(f"Filled website: {website_url}", "info", lq)
         except Exception:
-            log("Website field not found, trying second input", "warn", lq)
+            log("Website field not found, trying second visible input", "warn", lq)
             inputs = page.query_selector_all("input:visible")
             if len(inputs) >= 2:
                 inputs[1].fill(website_url)
-                log(f"Filled second input with: {website_url}", "info", lq)
+                log(f"Filled second input: {website_url}", "info", lq)
 
-        page.screenshot(path="/tmp/gorgias_pre_submit.png")
+        # Solve reCAPTCHA via CapSolver if sitekey found
+        captcha_token = None
+        sk = recaptcha_info["sitekey"]
+        if sk and _captcha.get("key"):
+            act = recaptcha_info["action"] or "signup"
+            log(f"Solving reCAPTCHA {ent_label} (action={act})...", "info", lq)
+            captcha_token = solve_recaptcha_v3(
+                sk, GORGIAS_SIGNUP_PAGE, action=act,
+                proxy=proxy, enterprise=is_enterprise,
+                log_fn=lambda msg, lvl="info": log(msg, lvl, lq),
+            )
+            if captcha_token:
+                log("reCAPTCHA solved, injecting token...", "ok", lq)
+                # Inject token: override grecaptcha.execute to return our token
+                page.evaluate(f"""(token) => {{
+                    // Override regular v3
+                    if (window.grecaptcha) {{
+                        const orig = window.grecaptcha.execute;
+                        window.grecaptcha.execute = function() {{
+                            return Promise.resolve(token);
+                        }};
+                    }}
+                    // Override Enterprise
+                    if (window.grecaptcha && window.grecaptcha.enterprise) {{
+                        window.grecaptcha.enterprise.execute = function() {{
+                            return Promise.resolve(token);
+                        }};
+                    }}
+                    // Also set any hidden recaptcha response fields
+                    document.querySelectorAll('[name="g-recaptcha-response"], #g-recaptcha-response, textarea[id*="recaptcha"]').forEach(el => {{
+                        el.value = token;
+                    }});
+                }}""", captcha_token)
+            else:
+                log("reCAPTCHA solve failed, trying without token", "warn", lq)
+        elif not sk:
+            log("No reCAPTCHA sitekey found — page may not use reCAPTCHA", "info", lq)
 
         # Click submit button
         submit_sel = ('button[type="submit"], button:has-text("Create"), '
                       'button:has-text("Sign up"), button:has-text("Get started"), '
                       'input[type="submit"]')
-        page.wait_for_selector(submit_sel, timeout=5000)
-        page.click(submit_sel)
-        log("Clicked submit button", "info", lq)
+        try:
+            page.wait_for_selector(submit_sel, timeout=5000)
+        except Exception:
+            log("Submit button not found via selector, looking for any button...", "warn", lq)
+            submit_sel = "button"
 
-        # Wait for navigation — Gorgias redirects to {country}.gorgias.com/app/onboarding
-        page.wait_for_url("**gorgias.com/**", timeout=45000)
+        # Set up a wait for navigation BEFORE clicking
+        with page.expect_navigation(timeout=60000, wait_until="networkidle") as nav_info:
+            page.click(submit_sel)
+            log("Clicked submit, waiting for navigation...", "info", lq)
+
         time.sleep(3)
         final_url = page.url
         log(f"Post-signup URL: {final_url}", "ok", lq)
-        page.screenshot(path="/tmp/gorgias_post_submit.png")
+
+        # Check if we're still on the signup page (error)
+        if "/signup" in final_url and "gorgias.com/signup" in final_url:
+            # Check for error messages on the page
+            error_text = page.evaluate("""() => {
+                const errs = document.querySelectorAll('[class*="error"], [class*="alert"], [role="alert"]');
+                return Array.from(errs).map(e => e.textContent.trim()).filter(t => t).join(' | ');
+            }""")
+            if error_text:
+                log(f"Signup error on page: {error_text}", "error", lq)
+            # Maybe the form submitted via XHR without navigation
+            if captured_requests:
+                log(f"Captured requests: {json.dumps(captured_requests[-3:])[:400]}", "info", lq)
+            browser.close()
+            pw_ctx.stop()
+            return {"ok": False, "error": f"stayed_on_signup: {error_text or 'unknown'}"}
 
         # Extract subdomain from URL like https://cz.gorgias.com/app/onboarding
         real_subdomain = None
@@ -499,8 +653,8 @@ def _try_signup(sess: http.Session, email: str, password: str,
             real_subdomain = m.group(1)
             log(f"Detected subdomain: {real_subdomain}", "ok", lq)
 
-        # Try to click "Finish later" or "Skip" on onboarding if present
-        for skip_text in ["Finish later", "Skip", "skip", "Later", "Not now"]:
+        # Try to click "Finish later" on onboarding
+        for skip_text in ["Finish later", "Skip", "Later", "Not now"]:
             try:
                 skip_btn = page.locator(f"text={skip_text}").first
                 if skip_btn.is_visible(timeout=2000):
@@ -511,28 +665,21 @@ def _try_signup(sess: http.Session, email: str, password: str,
             except Exception:
                 continue
 
-        page.screenshot(path="/tmp/gorgias_final.png")
         final_url2 = page.url
-        log(f"Final URL: {final_url2}", "info", lq)
-
-        # Try to extract subdomain from final URL too
         if not real_subdomain:
             m2 = re.search(r"https?://([a-z0-9-]+)\.gorgias\.com", final_url2)
             if m2 and m2.group(1) not in ("www", "app", "api"):
                 real_subdomain = m2.group(1)
-                log(f"Detected subdomain from final URL: {real_subdomain}", "ok", lq)
 
         if not real_subdomain:
-            log("Could not detect subdomain from redirect URL", "warn", lq)
             real_subdomain = subdomain
 
-        # Try to extract cookies for later API use
         cookies = ctx.cookies()
         cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies
                                if "gorgias" in c.get("domain", ""))
 
         browser.close()
-        pw_context.stop()
+        pw_ctx.stop()
 
         return {
             "ok": True,
@@ -545,8 +692,8 @@ def _try_signup(sess: http.Session, email: str, password: str,
         try:
             if browser:
                 browser.close()
-            if pw_context:
-                pw_context.stop()
+            if pw_ctx:
+                pw_ctx.stop()
         except Exception:
             pass
         return {"ok": False, "error": f"playwright_error: {e}"}
