@@ -571,39 +571,74 @@ def _try_signup(sess: http.Session, email: str, password: str,
                     break
                 log(f"Failed with action={action}, trying next...", "warn", lq)
 
-        # Detect Turnstile sitekey from the page
-        turnstile_sitekey = page.evaluate("""() => {
-            const el = document.querySelector('[data-sitekey].cf-turnstile, .cf-turnstile[data-sitekey]');
-            if (el) return el.getAttribute('data-sitekey');
-            const divs = document.querySelectorAll('div[data-sitekey]');
-            for (const d of divs) {
-                if (d.className && d.className.includes('turnstile')) return d.getAttribute('data-sitekey');
-            }
-            const scripts = document.querySelectorAll('script[src*="turnstile"]');
-            if (scripts.length > 0) {
-                const allSitekeys = document.querySelectorAll('[data-sitekey]');
-                for (const el of allSitekeys) {
+        # Wait for Cloudflare Turnstile to auto-solve in the browser
+        # Turnstile renders async and auto-solves without user interaction
+        log("Waiting for Turnstile to auto-solve...", "info", lq)
+        turnstile_token = None
+        for i in range(20):
+            cf_val = page.evaluate("""() => {
+                // Check input field
+                const el = document.querySelector('input[name="cf-turnstile-response"]');
+                if (el && el.value) return el.value;
+                // Check iframe response
+                const iframes = document.querySelectorAll('iframe[src*="turnstile"]');
+                for (const f of iframes) {
+                    try {
+                        const resp = f.contentDocument?.querySelector('input[name="cf-turnstile-response"]');
+                        if (resp && resp.value) return resp.value;
+                    } catch(e) {}
+                }
+                // Check turnstile API
+                if (window.turnstile) {
+                    try { return window.turnstile.getResponse() || ''; } catch(e) {}
+                }
+                return '';
+            }""")
+            if cf_val:
+                turnstile_token = cf_val
+                log(f"Turnstile auto-solved! (token len={len(cf_val)}, wait={i}s)", "ok", lq)
+                break
+            if i == 5:
+                log("Turnstile still solving...", "info", lq)
+            time.sleep(1)
+
+        if not turnstile_token:
+            log("Turnstile did not auto-solve, trying CapSolver...", "warn", lq)
+            # Detect Turnstile sitekey
+            turnstile_sitekey = page.evaluate("""() => {
+                // Check all data-sitekey elements (non-reCAPTCHA ones)
+                const els = document.querySelectorAll('[data-sitekey]');
+                for (const el of els) {
                     const sk = el.getAttribute('data-sitekey');
                     if (sk && !sk.startsWith('6L')) return sk;
                 }
-            }
-            return null;
-        }""")
-        if turnstile_sitekey:
-            log(f"Cloudflare Turnstile detected: sitekey={turnstile_sitekey}", "info", lq)
-
-        # Solve Turnstile if present
-        turnstile_token = None
-        if turnstile_sitekey and _captcha.get("key"):
-            log("Solving Cloudflare Turnstile...", "info", lq)
-            turnstile_token = solve_turnstile(
-                turnstile_sitekey, GORGIAS_SIGNUP_PAGE, proxy=proxy,
-                log_fn=lambda msg, lvl="info": log(msg, lvl, lq),
-            )
-            if turnstile_token:
-                log("Turnstile solved!", "ok", lq)
+                // Check cf-turnstile divs
+                const cf = document.querySelector('.cf-turnstile');
+                if (cf && cf.dataset.sitekey) return cf.dataset.sitekey;
+                // Check script src for turnstile
+                const scripts = document.querySelectorAll('script[src*="challenges.cloudflare.com"]');
+                if (scripts.length > 0) {
+                    // Look in page source for sitekey
+                    const html = document.documentElement.innerHTML;
+                    const m = html.match(/data-sitekey="(0x[^"]+)"/);
+                    if (m) return m[1];
+                }
+                return null;
+            }""")
+            if turnstile_sitekey:
+                log(f"Turnstile sitekey: {turnstile_sitekey}", "info", lq)
+                if _captcha.get("key"):
+                    log("Solving Turnstile via CapSolver...", "info", lq)
+                    turnstile_token = solve_turnstile(
+                        turnstile_sitekey, GORGIAS_SIGNUP_PAGE, proxy=proxy,
+                        log_fn=lambda msg, lvl="info": log(msg, lvl, lq),
+                    )
+                    if turnstile_token:
+                        log("Turnstile solved via CapSolver!", "ok", lq)
+                    else:
+                        log("Turnstile CapSolver solve failed", "error", lq)
             else:
-                log("Turnstile solve failed, continuing without", "warn", lq)
+                log("Could not detect Turnstile sitekey", "warn", lq)
 
         # Fill form fields (exact names from page inspection)
         page.wait_for_selector('input[name="email"]', timeout=10000)
@@ -613,45 +648,7 @@ def _try_signup(sess: http.Session, email: str, password: str,
         page.fill('input[name="company_domain"]', website_url)
         log(f"Filled company_domain: {website_url}", "info", lq)
 
-        # Inject reCAPTCHA token AND Turnstile token
-        if captcha_token or turnstile_token:
-            log("Injecting captcha tokens...", "info", lq)
-            page.evaluate("""(tokens) => {
-                const [recaptchaToken, turnstileToken] = tokens;
-                // reCAPTCHA: set hidden textarea
-                if (recaptchaToken) {
-                    const ta = document.querySelector('textarea[name="g-recaptcha-response"]');
-                    if (ta) ta.value = recaptchaToken;
-                    document.querySelectorAll('textarea[id*="recaptcha"]').forEach(el => {
-                        el.value = recaptchaToken;
-                    });
-                    // Override grecaptcha.execute for form JS
-                    if (window.grecaptcha) {
-                        window.grecaptcha.execute = function() {
-                            return Promise.resolve(recaptchaToken);
-                        };
-                        if (window.grecaptcha.enterprise) {
-                            window.grecaptcha.enterprise.execute = function() {
-                                return Promise.resolve(recaptchaToken);
-                            };
-                        }
-                    }
-                }
-                // Turnstile: set hidden input
-                if (turnstileToken) {
-                    const cf = document.querySelector('input[name="cf-turnstile-response"]');
-                    if (cf) cf.value = turnstileToken;
-                    document.querySelectorAll('[name="cf-turnstile-response"]').forEach(el => {
-                        el.value = turnstileToken;
-                    });
-                    // Override turnstile callbacks
-                    if (window.turnstile) {
-                        window.turnstile.getResponse = function() { return turnstileToken; };
-                    }
-                }
-            }""", [captcha_token or "", turnstile_token or ""])
-        else:
-            log("No captcha tokens available, submitting without", "warn", lq)
+        log("Injecting captcha tokens into page...", "info", lq)
 
         # Fill hidden fields that the page JS leaves empty
         fullname = f"{first} {last}"
@@ -676,17 +673,11 @@ def _try_signup(sess: http.Session, email: str, password: str,
         # Override with our solved tokens
         if captcha_token:
             form_data["g-recaptcha-response"] = captcha_token
-        # Get Turnstile token from page if it auto-solved
-        cf_val = page.evaluate("""() => {
-            const el = document.querySelector('input[name="cf-turnstile-response"]');
-            return el ? el.value : '';
-        }""")
-        if cf_val:
-            form_data["cf-turnstile-response"] = cf_val
-            log(f"Using page Turnstile token (len={len(cf_val)})", "ok", lq)
-        elif turnstile_token:
+        if turnstile_token:
             form_data["cf-turnstile-response"] = turnstile_token
-            log("Using CapSolver Turnstile token", "ok", lq)
+            log(f"Turnstile token set (len={len(turnstile_token)})", "ok", lq)
+        else:
+            log("WARNING: No Turnstile token — submit will likely fail", "error", lq)
 
         # Call user/submit on accounts.gorgias.com (NOT www.gorgias.com which returns 405)
         SUBMIT_URL = "https://accounts.gorgias.com/signup/user/submit"
