@@ -653,15 +653,20 @@ def _try_signup(sess: http.Session, email: str, password: str,
         else:
             log("No captcha tokens available, submitting without", "warn", lq)
 
-        # Instead of clicking submit (which requires Turnstile),
-        # call user/submit directly via fetch() from the page context.
-        # We already have the session (cookies from user/init) and reCAPTCHA token.
-        log("Calling user/submit directly via page fetch...", "info", lq)
+        # Fill hidden fields that the page JS leaves empty
+        fullname = f"{first} {last}"
+        page.evaluate("""(data) => {
+            const fn = document.querySelector('input[name="fullname"]');
+            if (fn) fn.value = data.fullname;
+            const ad = document.querySelector('input[name="account_domain"]');
+            if (ad) ad.value = data.account_domain;
+        }""", {"fullname": fullname, "account_domain": subdomain})
+        log(f"Set hidden fields: fullname={fullname}, account_domain={subdomain}", "info", lq)
 
         # Collect all form fields
         form_data = page.evaluate("""() => {
             const fields = {};
-            document.querySelectorAll('#signup-form input, #signup-form textarea, #signup-form select, form input, form textarea').forEach(el => {
+            document.querySelectorAll('form input, form textarea, form select').forEach(el => {
                 if (el.name) fields[el.name] = el.value || '';
             });
             return fields;
@@ -683,22 +688,25 @@ def _try_signup(sess: http.Session, email: str, password: str,
             form_data["cf-turnstile-response"] = turnstile_token
             log("Using CapSolver Turnstile token", "ok", lq)
 
-        # Make the submit call from within the page (preserves cookies/session)
-        submit_result = page.evaluate("""(formData) => {
-            return fetch('/signup/user/submit', {
+        # Call user/submit on accounts.gorgias.com (NOT www.gorgias.com which returns 405)
+        SUBMIT_URL = "https://accounts.gorgias.com/signup/user/submit"
+        log(f"Calling {SUBMIT_URL} ...", "info", lq)
+
+        submit_result = page.evaluate("""(args) => {
+            const [url, formData] = args;
+            return fetch(url, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(formData),
-                credentials: 'same-origin'
+                credentials: 'include'
             }).then(r => r.text().then(body => ({status: r.status, body: body, url: r.url})))
               .catch(e => ({status: 0, body: e.toString(), url: ''}));
-        }""", form_data)
+        }""", [SUBMIT_URL, form_data])
 
         log(f"user/submit → {submit_result.get('status')} {submit_result.get('body', '')[:300]}", "info", lq)
 
         if submit_result.get("status") in (200, 201, 202):
             log("Signup submitted successfully!", "ok", lq)
-            # Check for redirect in response
             try:
                 resp_data = json.loads(submit_result.get("body", "{}"))
                 redirect_url = resp_data.get("redirect_url") or resp_data.get("redirect") or ""
@@ -709,25 +717,9 @@ def _try_signup(sess: http.Session, email: str, password: str,
                 pass
             time.sleep(3)
         else:
-            # Try submitting as form-encoded instead of JSON
-            log("JSON submit failed, trying form-encoded...", "warn", lq)
-            submit_result2 = page.evaluate("""(formData) => {
-                const params = new URLSearchParams(formData).toString();
-                return fetch('/signup/user/submit', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: params,
-                    credentials: 'same-origin'
-                }).then(r => r.text().then(body => ({status: r.status, body: body})))
-                  .catch(e => ({status: 0, body: e.toString()}));
-            }""", form_data)
-            log(f"form-encoded submit → {submit_result2.get('status')} {submit_result2.get('body', '')[:300]}", "info", lq)
-
-            if submit_result2.get("status") not in (200, 201, 202):
-                browser.close()
-                pw_ctx.stop()
-                return {"ok": False, "error": f"signup_failed: {submit_result.get('body', '')[:200]}"}
-            time.sleep(3)
+            browser.close()
+            pw_ctx.stop()
+            return {"ok": False, "error": f"submit_{submit_result.get('status')}: {submit_result.get('body', '')[:200]}"}
 
         final_url = page.url
         log(f"Post-submit URL: {final_url}", "info", lq)
