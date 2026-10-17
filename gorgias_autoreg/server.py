@@ -6,6 +6,7 @@ Open: http://localhost:5758
 from __future__ import annotations
 import threading, queue, time, re, csv, io, json, random, string, warnings
 import os, hashlib, base64
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, Response, request, jsonify, stream_with_context
@@ -395,81 +396,160 @@ def _try_signup(sess: http.Session, email: str, password: str,
                 first: str, last: str, company: str, subdomain: str,
                 lq, proxy: str | None = None) -> dict:
     """
-    Try multiple Gorgias signup endpoints.
-    Returns {"ok": True, "data": ...} or {"ok": False, "error": ...}
+    Register on Gorgias using Playwright browser automation.
+    Gorgias signup uses single-use session tokens embedded in the page,
+    so plain HTTP POSTs always fail (405/403). A real browser is required.
+    Returns {"ok": True, "data": {...}, "subdomain": "xx"} or {"ok": False, "error": ...}
     """
-    log(f"Attempting signup for {email} / subdomain={subdomain}", "info", lq)
+    log(f"Attempting Playwright signup for {email}", "info", lq)
 
-    recaptcha_token = None
-    if _captcha.get("key") and GORGIAS_RECAPTCHA_SITEKEY:
-        log("Solving reCAPTCHA v2...", "info", lq)
-        recaptcha_token = solve_recaptcha_v2(
-            GORGIAS_RECAPTCHA_SITEKEY, GORGIAS_SIGNUP_PAGE, proxy=proxy,
-            log_fn=lambda msg, lvl="info": log(msg, lvl, lq),
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        log("Playwright not installed — pip install playwright && playwright install chromium", "error", lq)
+        return {"ok": False, "error": "playwright_not_installed"}
+
+    website_url = f"https://{company.lower().replace(' ', '')}.com"
+    chromium_path = os.environ.get(
+        "CHROMIUM_PATH",
+        "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+    )
+    if not os.path.isfile(chromium_path):
+        chromium_path = None
+
+    pw_context = None
+    browser = None
+    try:
+        pw_context = sync_playwright().start()
+        launch_args = ["--no-sandbox", "--disable-dev-shm-usage",
+                       "--disable-blink-features=AutomationControlled"]
+        launch_kw: dict = {"headless": True, "args": launch_args}
+        if chromium_path:
+            launch_kw["executable_path"] = chromium_path
+
+        if proxy:
+            parts = proxy.replace("://", "||").split("||", 1)
+            scheme = parts[0] if len(parts) == 2 else "http"
+            rest = parts[-1]
+            proxy_cfg: dict = {"server": f"{scheme}://{rest}"}
+            if "@" in rest:
+                creds, host = rest.rsplit("@", 1)
+                proxy_cfg["server"] = f"{scheme}://{host}"
+                if ":" in creds:
+                    proxy_cfg["username"], proxy_cfg["password"] = creds.split(":", 1)
+            launch_kw["proxy"] = proxy_cfg
+
+        log("Launching headless Chromium...", "info", lq)
+        browser = pw_context.chromium.launch(**launch_kw)
+        ctx = browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800},
         )
-        if recaptcha_token:
-            log("reCAPTCHA solved OK", "ok", lq)
-        else:
-            log("reCAPTCHA solve failed, trying without token", "warn", lq)
+        page = ctx.new_page()
 
-    # Gorgias signup form: only email + website URL on step 1
-    # subdomain and name are set up later via confirmation link
-    website_url = f"https://{subdomain}.com"
-    payloads = [
-        # step-1 form fields (what the /signup form actually sends)
-        {"email": email, "url": website_url},
-        {"email": email, "website": website_url},
-        {"email": email, "website_url": website_url},
-        {"email": email, "shop_url": website_url},
-        # full payload fallback (in case they accept it all at once)
-        {"email": email, "url": website_url, "first_name": first, "last_name": last,
-         "name": company, "subdomain": subdomain, "password": password},
-    ]
+        log("Navigating to gorgias.com/signup ...", "info", lq)
+        page.goto(GORGIAS_SIGNUP_PAGE, wait_until="networkidle", timeout=30000)
+        log(f"Page loaded: {page.url}", "info", lq)
 
-    endpoints = [GORGIAS_SIGNUP_URL] + GORGIAS_SIGNUP_ALT
+        # Fill email field
+        email_sel = 'input[name="email"], input[type="email"], input[placeholder*="email" i]'
+        page.wait_for_selector(email_sel, timeout=10000)
+        page.fill(email_sel, email)
+        log(f"Filled email: {email}", "info", lq)
 
-    hdrs = {"Content-Type": "application/json",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": "https://gorgias.com/signup"}
+        # Fill website/URL field
+        url_sel = ('input[name="website"], input[name="url"], input[name="website_url"], '
+                   'input[name="shop_url"], input[placeholder*="website" i], '
+                   'input[placeholder*="url" i], input[placeholder*="store" i], '
+                   'input[type="url"]')
+        try:
+            page.wait_for_selector(url_sel, timeout=5000)
+            page.fill(url_sel, website_url)
+            log(f"Filled website: {website_url}", "info", lq)
+        except Exception:
+            log("Website field not found, trying second input", "warn", lq)
+            inputs = page.query_selector_all("input:visible")
+            if len(inputs) >= 2:
+                inputs[1].fill(website_url)
+                log(f"Filled second input with: {website_url}", "info", lq)
 
-    for endpoint in endpoints:
-        attempts = [("json", {"json": p, "headers": hdrs}) for p in payloads[:3]]
-        for fmt, kwargs in attempts:
+        page.screenshot(path="/tmp/gorgias_pre_submit.png")
+
+        # Click submit button
+        submit_sel = ('button[type="submit"], button:has-text("Create"), '
+                      'button:has-text("Sign up"), button:has-text("Get started"), '
+                      'input[type="submit"]')
+        page.wait_for_selector(submit_sel, timeout=5000)
+        page.click(submit_sel)
+        log("Clicked submit button", "info", lq)
+
+        # Wait for navigation — Gorgias redirects to {country}.gorgias.com/app/onboarding
+        page.wait_for_url("**gorgias.com/**", timeout=45000)
+        time.sleep(3)
+        final_url = page.url
+        log(f"Post-signup URL: {final_url}", "ok", lq)
+        page.screenshot(path="/tmp/gorgias_post_submit.png")
+
+        # Extract subdomain from URL like https://cz.gorgias.com/app/onboarding
+        real_subdomain = None
+        m = re.search(r"https?://([a-z0-9-]+)\.gorgias\.com", final_url)
+        if m and m.group(1) not in ("www", "app", "api"):
+            real_subdomain = m.group(1)
+            log(f"Detected subdomain: {real_subdomain}", "ok", lq)
+
+        # Try to click "Finish later" or "Skip" on onboarding if present
+        for skip_text in ["Finish later", "Skip", "skip", "Later", "Not now"]:
             try:
-                log(f"POST {endpoint} [{fmt}]", "info", lq)
-                r = sess.post(endpoint, timeout=25, **kwargs)
-                log(f"  → {r.status_code}  body: {r.text[:300]}", "info", lq)
-                if r.status_code in (200, 201, 202):
-                    try:
-                        data = r.json()
-                    except Exception:
-                        data = {"raw": r.text[:500]}
-                    log(f"Signup success: {json.dumps(data)[:200]}", "ok", lq)
-                    return {"ok": True, "data": data}
-                elif r.status_code == 422:
-                    try:
-                        err = r.json()
-                        err_str = str(err)
-                    except Exception:
-                        err_str = r.text[:300]
-                    if "subdomain" in err_str.lower() and "taken" in err_str.lower():
-                        return {"ok": False, "error": f"subdomain_taken:{subdomain}"}
-                    if "email" in err_str.lower() and ("taken" in err_str.lower() or "exist" in err_str.lower()):
-                        return {"ok": False, "error": f"email_taken:{email}"}
-                    log(f"  Validation error: {err_str[:200]}", "warn", lq)
-                elif r.status_code == 404:
-                    log(f"  Not found", "warn", lq)
-                    break  # try next endpoint
-                elif r.status_code in (429, 503):
-                    log(f"  Rate limited, waiting...", "warn", lq)
-                    time.sleep(10)
-            except http.exceptions.ConnectionError as e:
-                log(f"  Connection error: {e}", "warn", lq)
-                break
-            except Exception as e:
-                log(f"  Error: {e}", "warn", lq)
+                skip_btn = page.locator(f"text={skip_text}").first
+                if skip_btn.is_visible(timeout=2000):
+                    skip_btn.click()
+                    log(f"Clicked '{skip_text}'", "info", lq)
+                    time.sleep(2)
+                    break
+            except Exception:
+                continue
 
-    return {"ok": False, "error": "All signup endpoints failed"}
+        page.screenshot(path="/tmp/gorgias_final.png")
+        final_url2 = page.url
+        log(f"Final URL: {final_url2}", "info", lq)
+
+        # Try to extract subdomain from final URL too
+        if not real_subdomain:
+            m2 = re.search(r"https?://([a-z0-9-]+)\.gorgias\.com", final_url2)
+            if m2 and m2.group(1) not in ("www", "app", "api"):
+                real_subdomain = m2.group(1)
+                log(f"Detected subdomain from final URL: {real_subdomain}", "ok", lq)
+
+        if not real_subdomain:
+            log("Could not detect subdomain from redirect URL", "warn", lq)
+            real_subdomain = subdomain
+
+        # Try to extract cookies for later API use
+        cookies = ctx.cookies()
+        cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies
+                               if "gorgias" in c.get("domain", ""))
+
+        browser.close()
+        pw_context.stop()
+
+        return {
+            "ok": True,
+            "data": {"url": final_url, "cookies": cookie_str[:200]},
+            "subdomain": real_subdomain,
+        }
+
+    except Exception as e:
+        log(f"Playwright signup error: {e}", "error", lq)
+        try:
+            if browser:
+                browser.close()
+            if pw_context:
+                pw_context.stop()
+        except Exception:
+            pass
+        return {"ok": False, "error": f"playwright_error: {e}"}
 
 def _gorgias_login(subdomain: str, email: str, password: str,
                    lq, proxy: str | None = None) -> http.Session | None:
@@ -568,6 +648,64 @@ def _get_user_id(sess: http.Session, subdomain: str, lq) -> str | None:
             pass
     return None
 
+def _click_confirmation_link(url: str, lq, proxy: str | None = None):
+    """Open confirmation link in a real browser (Gorgias may require JS)."""
+    from playwright.sync_api import sync_playwright
+
+    chromium_path = os.environ.get(
+        "CHROMIUM_PATH",
+        "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+    )
+    if not os.path.isfile(chromium_path):
+        chromium_path = None
+
+    pw = sync_playwright().start()
+    try:
+        launch_kw: dict = {
+            "headless": True,
+            "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+        }
+        if chromium_path:
+            launch_kw["executable_path"] = chromium_path
+        if proxy:
+            parts = proxy.replace("://", "||").split("||", 1)
+            scheme = parts[0] if len(parts) == 2 else "http"
+            rest = parts[-1]
+            proxy_cfg: dict = {"server": f"{scheme}://{rest}"}
+            if "@" in rest:
+                creds, host = rest.rsplit("@", 1)
+                proxy_cfg["server"] = f"{scheme}://{host}"
+                if ":" in creds:
+                    proxy_cfg["username"], proxy_cfg["password"] = creds.split(":", 1)
+            launch_kw["proxy"] = proxy_cfg
+
+        browser = pw.chromium.launch(**launch_kw)
+        page = browser.new_page()
+        log(f"Opening confirmation link in browser...", "info", lq)
+        page.goto(url, wait_until="networkidle", timeout=30000)
+        time.sleep(3)
+        final = page.url
+        log(f"Confirmation done → {final[:100]}", "ok", lq)
+
+        # If Gorgias asks to set a password after confirming, try to fill it
+        pw_input = page.query_selector('input[type="password"]')
+        if pw_input:
+            log("Password setup page detected — filling password...", "info", lq)
+            pw_inputs = page.query_selector_all('input[type="password"]')
+            for inp in pw_inputs:
+                inp.fill("P@ss" + rand_str(8) + "1!")
+            submit = page.query_selector('button[type="submit"], button:has-text("Set password"), button:has-text("Continue")')
+            if submit:
+                submit.click()
+                time.sleep(3)
+                log(f"Password set, URL: {page.url[:100]}", "ok", lq)
+
+        page.screenshot(path="/tmp/gorgias_confirmed.png")
+        browser.close()
+    finally:
+        pw.stop()
+
+
 # ── Main autoreg worker ────────────────────────────────────────────────────────
 
 def _register_one(cfg: dict, lq: queue.Queue, proxy: str | None) -> dict:
@@ -610,6 +748,11 @@ def _register_one(cfg: dict, lq: queue.Queue, proxy: str | None) -> dict:
             log(f"Signup failed: {result.get('error')}", "error", lq)
             return {"status": "failed", "reason": result.get("error", "signup_failed")}
 
+    # Playwright may have detected the real subdomain from the redirect URL
+    if result.get("subdomain"):
+        subdomain = result["subdomain"]
+        log(f"Using auto-assigned subdomain: {subdomain}", "ok", lq)
+
     log("Waiting for confirmation email (up to 120s)...", "info", lq)
     email_body = wait_for_email(anymsg_key, email_id, "confirm", timeout=120, proxy=proxy)
 
@@ -630,12 +773,16 @@ def _register_one(cfg: dict, lq: queue.Queue, proxy: str | None) -> dict:
         log("Could not extract confirmation link from email body", "warn", lq)
         log(f"Email excerpt: {email_body[:300]}", "warn", lq)
     else:
-        log(f"Clicking confirmation link: {confirm_url[:80]}...", "info", lq)
+        log(f"Clicking confirmation link via Playwright: {confirm_url[:80]}...", "info", lq)
         try:
-            rc = sess.get(confirm_url, timeout=20, allow_redirects=True)
-            log(f"Confirmation response: {rc.status_code} → {rc.url[:80]}", "ok", lq)
+            _click_confirmation_link(confirm_url, lq, proxy)
         except Exception as e:
-            log(f"Confirmation click error: {e}", "warn", lq)
+            log(f"Playwright confirmation error: {e}, trying HTTP fallback...", "warn", lq)
+            try:
+                rc = sess.get(confirm_url, timeout=20, allow_redirects=True)
+                log(f"HTTP confirmation: {rc.status_code} → {rc.url[:80]}", "ok", lq)
+            except Exception as e2:
+                log(f"HTTP confirmation also failed: {e2}", "warn", lq)
 
     log("Logging in to get session...", "info", lq)
     auth_sess = _gorgias_login(subdomain, temp_email, password, lq, proxy)
