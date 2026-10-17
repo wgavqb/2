@@ -135,34 +135,68 @@ def _anymsg_headers(key: str) -> dict:
     return {"X-Api-Key": key, "Content-Type": "application/json"}
 
 def order_email(api_key: str, proxy: str | None = None) -> dict:
-    """Order a new temporary email."""
-    try:
-        r = http.post(
-            f"{ANYMSG_BASE}/order/email",
-            headers=_anymsg_headers(api_key),
-            json={},
-            proxies=proxy_dict(proxy),
-            timeout=30, verify=False
-        )
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        return {"error": str(e)}
+    """Order a new temporary email. Tries multiple auth/payload variants."""
+    proxies = proxy_dict(proxy)
+    attempts = [
+        # 1. token in body (most common for this API)
+        lambda: http.post(f"{ANYMSG_BASE}/order/email", json={"token": api_key},
+                          timeout=30, verify=False, proxies=proxies),
+        # 2. token as query param
+        lambda: http.get(f"{ANYMSG_BASE}/order/email", params={"token": api_key},
+                         timeout=30, verify=False, proxies=proxies),
+        # 3. X-Api-Key header with empty body
+        lambda: http.post(f"{ANYMSG_BASE}/order/email", headers=_anymsg_headers(api_key),
+                          json={}, timeout=30, verify=False, proxies=proxies),
+        # 4. api_key in body
+        lambda: http.post(f"{ANYMSG_BASE}/order/email", json={"api_key": api_key},
+                          timeout=30, verify=False, proxies=proxies),
+        # 5. GET with X-Api-Key header
+        lambda: http.get(f"{ANYMSG_BASE}/order/email", headers=_anymsg_headers(api_key),
+                         timeout=30, verify=False, proxies=proxies),
+        # 6. alternate endpoint /email/order
+        lambda: http.post(f"{ANYMSG_BASE}/email/order", json={"token": api_key},
+                          timeout=30, verify=False, proxies=proxies),
+        # 7. v1 endpoint
+        lambda: http.post(f"{ANYMSG_BASE}/v1/order/email", json={"token": api_key},
+                          timeout=30, verify=False, proxies=proxies),
+    ]
+    last_err = {}
+    for fn in attempts:
+        try:
+            r = fn()
+            data = r.json()
+            # success if we got an id or email field back
+            if isinstance(data, dict) and (data.get("id") or data.get("email") or data.get("login")):
+                return data
+            last_err = data
+        except Exception as e:
+            last_err = {"error": str(e)}
+    return last_err
 
 def get_email_messages(api_key: str, email_id: str, proxy: str | None = None) -> list:
     """Get messages for an ordered email."""
-    try:
-        r = http.get(
-            f"{ANYMSG_BASE}/order/{email_id}/messages",
-            headers=_anymsg_headers(api_key),
-            proxies=proxy_dict(proxy),
-            timeout=20, verify=False
-        )
-        r.raise_for_status()
-        data = r.json()
-        return data if isinstance(data, list) else data.get("messages", [])
-    except Exception:
-        return []
+    proxies = proxy_dict(proxy)
+    endpoints = [
+        lambda: http.get(f"{ANYMSG_BASE}/order/{email_id}/messages",
+                         params={"token": api_key}, proxies=proxies, timeout=20, verify=False),
+        lambda: http.get(f"{ANYMSG_BASE}/order/{email_id}/messages",
+                         headers=_anymsg_headers(api_key), proxies=proxies, timeout=20, verify=False),
+        lambda: http.get(f"{ANYMSG_BASE}/email/{email_id}/messages",
+                         params={"token": api_key}, proxies=proxies, timeout=20, verify=False),
+    ]
+    for fn in endpoints:
+        try:
+            r = fn()
+            data = r.json()
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                msgs = data.get("messages") or data.get("data") or []
+                if isinstance(msgs, list):
+                    return msgs
+        except Exception:
+            pass
+    return []
 
 def wait_for_email(api_key: str, email_id: str, keyword: str,
                    timeout: int = 120, proxy: str | None = None) -> str | None:
