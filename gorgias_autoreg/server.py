@@ -511,31 +511,40 @@ def _try_signup(sess: http.Session, email: str, password: str,
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
             window.__cf_sitekey = null;
             window.__cf_callback = null;
-            window.__cf_widgetId = null;
 
-            const _origDefProp = Object.defineProperty;
-            let _hooked = false;
-            const _check = setInterval(() => {
-                if (window.turnstile && !_hooked) {
-                    _hooked = true;
-                    const _origRender = window.turnstile.render.bind(window.turnstile);
-                    window.turnstile.render = function(container, params) {
-                        if (params && params.sitekey) window.__cf_sitekey = params.sitekey;
-                        if (params && params.callback) window.__cf_callback_name = params.callback;
-                        if (typeof container === 'string') {
-                            const el = document.querySelector(container);
-                            if (el && el.dataset.sitekey) window.__cf_sitekey = el.dataset.sitekey;
-                        } else if (container && container.dataset && container.dataset.sitekey) {
-                            window.__cf_sitekey = container.dataset.sitekey;
-                        }
-                        const wid = _origRender(container, params);
-                        window.__cf_widgetId = wid;
-                        return wid;
-                    };
-                    clearInterval(_check);
+            // Hook turnstile global via Object.defineProperty (catches assignment)
+            let _real_turnstile;
+            Object.defineProperty(window, 'turnstile', {
+                configurable: true, enumerable: true,
+                get() { return _real_turnstile; },
+                set(val) {
+                    _real_turnstile = val;
+                    if (val && typeof val.render === 'function') {
+                        const _orig = val.render;
+                        val.render = function() {
+                            const el = arguments[0];
+                            const opts = arguments[1] || {};
+                            if (opts.sitekey) window.__cf_sitekey = opts.sitekey;
+                            if (opts.callback) window.__cf_callback = opts.callback;
+                            if (!window.__cf_sitekey) {
+                                const dom = typeof el === 'string' ? document.querySelector(el) : el;
+                                if (dom && dom.getAttribute) {
+                                    window.__cf_sitekey = dom.getAttribute('data-sitekey');
+                                }
+                            }
+                            return _orig.apply(this, arguments);
+                        };
+                    }
                 }
-            }, 50);
+            });
         """)
+
+        # Intercept Turnstile script URL for sitekey
+        cf_script_urls = []
+        def _on_request(req):
+            if "challenges.cloudflare.com" in req.url:
+                cf_script_urls.append(req.url)
+        page.on("request", _on_request)
 
         # Track API responses
         api_responses = []
@@ -569,23 +578,75 @@ def _try_signup(sess: http.Session, email: str, password: str,
             except Exception:
                 continue
 
-        # Get Turnstile sitekey from our hook
-        time.sleep(2)
-        turnstile_sitekey = page.evaluate("() => window.__cf_sitekey")
-        if not turnstile_sitekey:
-            # Fallback: scan DOM for data-sitekey (non-reCAPTCHA)
+        # Detect Turnstile sitekey — retry with multiple methods
+        turnstile_sitekey = None
+        for attempt in range(5):
+            time.sleep(2)
             turnstile_sitekey = page.evaluate("""() => {
-                const els = document.querySelectorAll('[data-sitekey]');
-                for (const el of els) {
+                // Method 1: Our init script hook
+                if (window.__cf_sitekey) return window.__cf_sitekey;
+
+                // Method 2: All data-sitekey attrs (skip reCAPTCHA ones starting with 6L)
+                for (const el of document.querySelectorAll('[data-sitekey]')) {
                     const sk = el.getAttribute('data-sitekey');
-                    if (sk && sk.startsWith('0x')) return sk;
+                    if (sk && !sk.startsWith('6L')) return sk;
                 }
-                const cf = document.querySelector('.cf-turnstile');
-                if (cf && cf.dataset.sitekey) return cf.dataset.sitekey;
+
+                // Method 3: .cf-turnstile div
+                const cfd = document.querySelector('.cf-turnstile');
+                if (cfd && cfd.dataset.sitekey) return cfd.dataset.sitekey;
+
+                // Method 4: Scan all inline scripts for 0x-prefixed keys
+                for (const s of document.querySelectorAll('script:not([src])')) {
+                    const m = (s.textContent || '').match(/sitekey['":\\s]+(0x[A-Za-z0-9_-]{20,})/);
+                    if (m) return m[1];
+                }
+
+                // Method 5: Turnstile render= parameter in script src
+                for (const s of document.querySelectorAll('script[src*="challenges.cloudflare.com"]')) {
+                    const m = s.src.match(/render=(0x[A-Za-z0-9_-]+)/);
+                    if (m) return m[1];
+                }
+
+                // Method 6: Scan full page HTML
                 const html = document.documentElement.innerHTML;
-                const m = html.match(/data-sitekey="(0x[^"]+)"/);
-                return m ? m[1] : null;
+                const m = html.match(/["'](0x[A-Za-z0-9_-]{20,})["']/);
+                if (m) return m[1];
+
+                return null;
             }""")
+            if turnstile_sitekey:
+                break
+            if attempt < 4:
+                log(f"Turnstile sitekey scan {attempt+1}/5 — not found yet", "info", lq)
+
+        # Also check Cloudflare script URLs for render= sitekey
+        if not turnstile_sitekey:
+            for url in cf_script_urls:
+                m = re.search(r'render=(0x[A-Za-z0-9_-]+)', url)
+                if m:
+                    turnstile_sitekey = m.group(1)
+                    break
+
+        # Log what we found for debugging
+        cf_debug = page.evaluate("""() => {
+            const info = {};
+            info.hook = window.__cf_sitekey;
+            info.turnstile_global = typeof window.turnstile;
+            info.sitekey_els = Array.from(document.querySelectorAll('[data-sitekey]')).map(
+                e => ({tag: e.tagName, cls: e.className.substring(0,50), sk: e.getAttribute('data-sitekey')})
+            );
+            info.cf_divs = Array.from(document.querySelectorAll('[class*="turnstile"],[id*="turnstile"]')).map(
+                e => ({tag: e.tagName, cls: e.className.substring(0,60), id: e.id, sk: e.getAttribute('data-sitekey'), html: e.innerHTML.substring(0,100)})
+            );
+            info.cf_iframes = Array.from(document.querySelectorAll('iframe')).filter(
+                f => f.src.includes('cloudflare') || f.src.includes('turnstile')
+            ).map(f => f.src.substring(0,150));
+            info.cf_input = !!document.querySelector('input[name="cf-turnstile-response"]');
+            return info;
+        }""")
+        log(f"Turnstile debug: {json.dumps(cf_debug)}", "info", lq)
+        log(f"CF script URLs: {cf_script_urls[:3]}", "info", lq)
         log(f"Turnstile sitekey: {turnstile_sitekey or 'NOT FOUND'}", "info", lq)
 
         # Solve both CAPTCHAs via CapSolver
