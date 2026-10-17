@@ -6,7 +6,8 @@ Open: http://localhost:5758
 from __future__ import annotations
 import threading, queue, time, re, csv, io, json, random, string, warnings
 import os, hashlib, base64
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")
+if os.path.isdir("/opt/pw-browsers"):
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, Response, request, jsonify, stream_with_context
