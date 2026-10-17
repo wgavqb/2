@@ -197,12 +197,14 @@ TWOCAP_URL     = "https://2captcha.com/in.php"
 CAPMONSTER_URL = "https://api.capmonster.cloud"
 RUCAPTCHA_URL  = "https://rucaptcha.com/in.php"
 
-def solve_recaptcha_v2(sitekey: str, page_url: str, proxy: str | None = None) -> str | None:
+def solve_recaptcha_v2(sitekey: str, page_url: str, proxy: str | None = None,
+                       log_fn=None) -> str | None:
     svc = _captcha.get("service", "capsolver")
     key = _captcha.get("key", "")
     if not key:
         return None
     px = proxy_dict(proxy)
+    def _log(msg): log_fn(msg, "info") if log_fn else None
     try:
         if svc == "capsolver":
             payload = {
@@ -217,15 +219,23 @@ def solve_recaptcha_v2(sitekey: str, page_url: str, proxy: str | None = None) ->
                 parsed = _parse_proxy_for_capsolver(proxy)
                 payload["task"].update(parsed)
             r = http.post(f"{CAPSOLVER_URL}/createTask", json=payload, timeout=30, verify=False)
-            tid = r.json().get("taskId")
+            resp = r.json()
+            tid = resp.get("taskId")
             if not tid:
+                _log(f"CapSolver createTask failed: {resp}")
                 return None
-            for _ in range(60):
+            _log(f"CapSolver task created: {tid}, polling...")
+            for i in range(60):
                 time.sleep(3)
                 r2 = http.post(f"{CAPSOLVER_URL}/getTaskResult", json={"clientKey": key, "taskId": tid}, timeout=20, verify=False)
                 d = r2.json()
                 if d.get("status") == "ready":
                     return d["solution"]["gRecaptchaResponse"]
+                if i % 10 == 9:
+                    _log(f"CapSolver still solving... ({(i+1)*3}s)")
+                if d.get("errorCode"):
+                    _log(f"CapSolver error: {d.get('errorDescription', d.get('errorCode'))}")
+                    return None
         elif svc in ("2captcha", "rucaptcha"):
             base = TWOCAP_URL if svc == "2captcha" else RUCAPTCHA_URL
             params = {"key": key, "method": "userrecaptcha", "googlekey": sitekey, "pageurl": page_url, "json": 1}
@@ -391,7 +401,8 @@ def _try_signup(sess: http.Session, email: str, password: str,
     if _captcha.get("key"):
         log("Solving reCAPTCHA v2...", "info", lq)
         recaptcha_token = solve_recaptcha_v2(
-            GORGIAS_RECAPTCHA_SITEKEY, GORGIAS_SIGNUP_PAGE, proxy=proxy
+            GORGIAS_RECAPTCHA_SITEKEY, GORGIAS_SIGNUP_PAGE, proxy=proxy,
+            log_fn=lambda msg, lvl="info": log(msg, lvl, lq),
         )
         if recaptcha_token:
             log("reCAPTCHA solved OK", "ok", lq)
