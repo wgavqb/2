@@ -3,6 +3,7 @@ Gorgias Suite — Autoreg + GorgiasMail + Campaign
 Run:  python server.py
 Open: http://localhost:5758
 """
+from __future__ import annotations
 import threading, queue, time, re, csv, io, json, random, string, warnings
 import os, hashlib, base64
 from datetime import datetime
