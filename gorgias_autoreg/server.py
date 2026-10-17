@@ -135,67 +135,45 @@ def _anymsg_headers(key: str) -> dict:
     return {"X-Api-Key": key, "Content-Type": "application/json"}
 
 def order_email(api_key: str, proxy: str | None = None) -> dict:
-    """Order a new temporary email. Tries multiple auth/payload variants."""
+    """Order a new temporary email via AnyMessage.shop API.
+    Tries multiple domains (gmx, mailcom, hotmail, outlook) in order.
+    """
     proxies = proxy_dict(proxy)
-    attempts = [
-        # 1. token in body (most common for this API)
-        lambda: http.post(f"{ANYMSG_BASE}/order/email", json={"token": api_key},
-                          timeout=30, verify=False, proxies=proxies),
-        # 2. token as query param
-        lambda: http.get(f"{ANYMSG_BASE}/order/email", params={"token": api_key},
-                         timeout=30, verify=False, proxies=proxies),
-        # 3. X-Api-Key header with empty body
-        lambda: http.post(f"{ANYMSG_BASE}/order/email", headers=_anymsg_headers(api_key),
-                          json={}, timeout=30, verify=False, proxies=proxies),
-        # 4. api_key in body
-        lambda: http.post(f"{ANYMSG_BASE}/order/email", json={"api_key": api_key},
-                          timeout=30, verify=False, proxies=proxies),
-        # 5. GET with X-Api-Key header
-        lambda: http.get(f"{ANYMSG_BASE}/order/email", headers=_anymsg_headers(api_key),
-                         timeout=30, verify=False, proxies=proxies),
-        # 6. alternate endpoint /email/order
-        lambda: http.post(f"{ANYMSG_BASE}/email/order", json={"token": api_key},
-                          timeout=30, verify=False, proxies=proxies),
-        # 7. v1 endpoint
-        lambda: http.post(f"{ANYMSG_BASE}/v1/order/email", json={"token": api_key},
-                          timeout=30, verify=False, proxies=proxies),
-    ]
+    domains = ["gmx", "mailcom", "hotmail", "outlook"]
     last_err = {}
-    for fn in attempts:
+    for domain in domains:
         try:
-            r = fn()
+            r = http.get(
+                f"{ANYMSG_BASE}/email/order",
+                params={"token": api_key, "site": "gorgias.com", "domain": domain},
+                timeout=30, verify=False, proxies=proxies,
+            )
             data = r.json()
-            # success if we got an id or email field back
-            if isinstance(data, dict) and (data.get("id") or data.get("email") or data.get("login")):
+            if isinstance(data, dict) and data.get("status") == "success":
                 return data
             last_err = data
         except Exception as e:
             last_err = {"error": str(e)}
-    return last_err
+    # Return standardized error dict
+    return {"error": last_err.get("value", str(last_err)), "_raw": last_err}
 
 def get_email_messages(api_key: str, email_id: str, proxy: str | None = None) -> list:
-    """Get messages for an ordered email."""
+    """Get message for an ordered email via AnyMessage.shop API."""
     proxies = proxy_dict(proxy)
-    endpoints = [
-        lambda: http.get(f"{ANYMSG_BASE}/order/{email_id}/messages",
-                         params={"token": api_key}, proxies=proxies, timeout=20, verify=False),
-        lambda: http.get(f"{ANYMSG_BASE}/order/{email_id}/messages",
-                         headers=_anymsg_headers(api_key), proxies=proxies, timeout=20, verify=False),
-        lambda: http.get(f"{ANYMSG_BASE}/email/{email_id}/messages",
-                         params={"token": api_key}, proxies=proxies, timeout=20, verify=False),
-    ]
-    for fn in endpoints:
-        try:
-            r = fn()
-            data = r.json()
-            if isinstance(data, list):
-                return data
-            if isinstance(data, dict):
-                msgs = data.get("messages") or data.get("data") or []
-                if isinstance(msgs, list):
-                    return msgs
-        except Exception:
-            pass
+    try:
+        r = http.get(
+            f"{ANYMSG_BASE}/email/getmessage",
+            params={"token": api_key, "id": email_id, "preview": 1},
+            timeout=20, verify=False, proxies=proxies,
+        )
+        data = r.json()
+        if isinstance(data, dict) and data.get("status") == "success":
+            html = data.get("message", "")
+            value = data.get("value", "")
+            return [{"body": html, "html": html, "subject": value}]
+        # "wait message" = not arrived yet, other errors logged silently
+    except Exception:
+        pass
     return []
 
 def wait_for_email(api_key: str, email_id: str, keyword: str,
