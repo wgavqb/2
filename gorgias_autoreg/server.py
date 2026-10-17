@@ -461,18 +461,20 @@ def _try_signup(sess: http.Session, email: str, password: str,
                 first: str, last: str, company: str, subdomain: str,
                 lq, proxy: str | None = None) -> dict:
     """
-    Register on Gorgias using visible Playwright browser.
-    Visible mode lets Turnstile auto-solve; reCAPTCHA solved via CapSolver.
+    Register on Gorgias using Playwright + CapSolver for both CAPTCHAs.
+    Hooks turnstile.render to capture sitekey, solves via CapSolver,
+    then injects both tokens and submits via direct API call.
     """
     log(f"Attempting Playwright signup for {email}", "info", lq)
 
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        log("Playwright not installed — pip install playwright && playwright install chromium", "error", lq)
+        log("Playwright not installed", "error", lq)
         return {"ok": False, "error": "playwright_not_installed"}
 
     website_url = f"{company.lower().replace(' ', '')}.com"
+    fullname = f"{first} {last}"
 
     pw_ctx = None
     browser = None
@@ -496,13 +498,44 @@ def _try_signup(sess: http.Session, email: str, password: str,
                     proxy_cfg["username"], proxy_cfg["password"] = creds.split(":", 1)
             launch_kw["proxy"] = proxy_cfg
 
-        log("Launching Chromium (visible for Turnstile)...", "info", lq)
+        log("Launching Chromium...", "info", lq)
         browser = pw_ctx.chromium.launch(**launch_kw)
         ctx = browser.new_context(
             user_agent=random.choice(USER_AGENTS),
             viewport={"width": 1280, "height": 800},
         )
         page = ctx.new_page()
+
+        # Stealth + Turnstile sitekey capture BEFORE page loads
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            window.__cf_sitekey = null;
+            window.__cf_callback = null;
+            window.__cf_widgetId = null;
+
+            const _origDefProp = Object.defineProperty;
+            let _hooked = false;
+            const _check = setInterval(() => {
+                if (window.turnstile && !_hooked) {
+                    _hooked = true;
+                    const _origRender = window.turnstile.render.bind(window.turnstile);
+                    window.turnstile.render = function(container, params) {
+                        if (params && params.sitekey) window.__cf_sitekey = params.sitekey;
+                        if (params && params.callback) window.__cf_callback_name = params.callback;
+                        if (typeof container === 'string') {
+                            const el = document.querySelector(container);
+                            if (el && el.dataset.sitekey) window.__cf_sitekey = el.dataset.sitekey;
+                        } else if (container && container.dataset && container.dataset.sitekey) {
+                            window.__cf_sitekey = container.dataset.sitekey;
+                        }
+                        const wid = _origRender(container, params);
+                        window.__cf_widgetId = wid;
+                        return wid;
+                    };
+                    clearInterval(_check);
+                }
+            }, 50);
+        """)
 
         # Track API responses
         api_responses = []
@@ -521,35 +554,68 @@ def _try_signup(sess: http.Session, email: str, password: str,
 
         log("Navigating to gorgias.com/signup ...", "info", lq)
         page.goto(GORGIAS_SIGNUP_PAGE, wait_until="domcontentloaded", timeout=30000)
-        time.sleep(3)
+        time.sleep(4)
         log(f"Page loaded: {page.url}", "info", lq)
 
-        # Dismiss cookie consent popup (Axeptio)
+        # Dismiss cookie popup
         for btn_text in ["OK!", "OK", "Accept", "No, thanks"]:
             try:
                 btn = page.locator(f"text='{btn_text}'").first
                 if btn.is_visible(timeout=2000):
                     btn.click()
-                    log(f"Dismissed cookie popup ('{btn_text}')", "info", lq)
+                    log(f"Dismissed popup ('{btn_text}')", "info", lq)
                     time.sleep(0.5)
                     break
             except Exception:
                 continue
 
-        # Solve reCAPTCHA v3 via CapSolver (in background while Turnstile loads)
+        # Get Turnstile sitekey from our hook
+        time.sleep(2)
+        turnstile_sitekey = page.evaluate("() => window.__cf_sitekey")
+        if not turnstile_sitekey:
+            # Fallback: scan DOM for data-sitekey (non-reCAPTCHA)
+            turnstile_sitekey = page.evaluate("""() => {
+                const els = document.querySelectorAll('[data-sitekey]');
+                for (const el of els) {
+                    const sk = el.getAttribute('data-sitekey');
+                    if (sk && sk.startsWith('0x')) return sk;
+                }
+                const cf = document.querySelector('.cf-turnstile');
+                if (cf && cf.dataset.sitekey) return cf.dataset.sitekey;
+                const html = document.documentElement.innerHTML;
+                const m = html.match(/data-sitekey="(0x[^"]+)"/);
+                return m ? m[1] : null;
+            }""")
+        log(f"Turnstile sitekey: {turnstile_sitekey or 'NOT FOUND'}", "info", lq)
+
+        # Solve both CAPTCHAs via CapSolver
         captcha_token = None
+        turnstile_token = None
         sitekey = GORGIAS_RECAPTCHA_SITEKEY
-        if sitekey and _captcha.get("key"):
-            log("Solving reCAPTCHA v3 (action=signup)...", "info", lq)
-            captcha_token = solve_recaptcha_v3(
-                sitekey, GORGIAS_SIGNUP_PAGE, action="signup",
-                proxy=proxy, enterprise=False,
-                log_fn=lambda msg, lvl="info": log(msg, lvl, lq),
-            )
-            if captcha_token:
-                log("reCAPTCHA v3 solved!", "ok", lq)
-            else:
-                log("reCAPTCHA solve failed", "error", lq)
+
+        if _captcha.get("key"):
+            # Solve reCAPTCHA v3
+            if sitekey:
+                log("Solving reCAPTCHA v3 ...", "info", lq)
+                captcha_token = solve_recaptcha_v3(
+                    sitekey, GORGIAS_SIGNUP_PAGE, action="signup",
+                    proxy=proxy, enterprise=False,
+                    log_fn=lambda msg, lvl="info": log(msg, lvl, lq),
+                )
+                if captcha_token:
+                    log("reCAPTCHA v3 solved!", "ok", lq)
+
+            # Solve Turnstile
+            if turnstile_sitekey:
+                log("Solving Turnstile via CapSolver...", "info", lq)
+                turnstile_token = solve_turnstile(
+                    turnstile_sitekey, GORGIAS_SIGNUP_PAGE, proxy=proxy,
+                    log_fn=lambda msg, lvl="info": log(msg, lvl, lq),
+                )
+                if turnstile_token:
+                    log(f"Turnstile solved! (token len={len(turnstile_token)})", "ok", lq)
+                else:
+                    log("Turnstile solve failed", "error", lq)
 
         # Fill visible form fields
         page.wait_for_selector('input[name="email"]', timeout=10000)
@@ -559,104 +625,65 @@ def _try_signup(sess: http.Session, email: str, password: str,
         page.fill('input[name="company_domain"]', website_url)
         log(f"Filled website: {website_url}", "info", lq)
 
-        # Fill hidden fields the page JS expects
-        fullname = f"{first} {last}"
-        page.evaluate("""(data) => {
-            const set = (name, val) => {
-                const el = document.querySelector('input[name="' + name + '"]');
-                if (el) { el.value = val; }
-            };
-            set('fullname', data.fullname);
-            set('password', data.password);
-            set('account_domain', data.account_domain);
-        }""", {"fullname": fullname, "password": password, "account_domain": subdomain})
-        log(f"Set hidden: fullname={fullname}, account_domain={subdomain}", "info", lq)
+        # Collect all form fields from page
+        form_data = page.evaluate("""() => {
+            const fields = {};
+            document.querySelectorAll('form input, form textarea, form select').forEach(el => {
+                if (el.name) fields[el.name] = el.value || '';
+            });
+            return fields;
+        }""")
 
-        # Wait for Turnstile to auto-solve (submit button becomes enabled)
-        log("Waiting for Turnstile to solve (submit button to enable)...", "info", lq)
-        submit_enabled = False
-        for i in range(30):
-            is_enabled = page.evaluate("""() => {
-                const btn = document.querySelector('input#signup-button') ||
-                            document.querySelector('input[type="submit"]');
-                return btn ? !btn.disabled : false;
-            }""")
-            if is_enabled:
-                log(f"Submit button enabled! (Turnstile solved in ~{i}s)", "ok", lq)
-                submit_enabled = True
-                break
-            if i % 10 == 9:
-                log(f"Still waiting for Turnstile... ({i+1}s)", "info", lq)
-            time.sleep(1)
-
-        if not submit_enabled:
-            log("Turnstile didn't solve in 30s, force-enabling button", "warn", lq)
-            page.evaluate("""() => {
-                const btn = document.querySelector('input#signup-button') ||
-                            document.querySelector('input[type="submit"]');
-                if (btn) { btn.disabled = false; btn.removeAttribute('disabled'); }
-            }""")
-
-        # Inject reCAPTCHA token — override grecaptcha.execute so the page JS uses our token
+        # Override with our data
+        form_data["email"] = email
+        form_data["company_domain"] = website_url
+        form_data["fullname"] = fullname
+        form_data["password"] = password
+        form_data["account_domain"] = subdomain
         if captcha_token:
-            log("Injecting reCAPTCHA token...", "info", lq)
-            page.evaluate("""(token) => {
-                // Set hidden textarea
-                document.querySelectorAll('textarea[name="g-recaptcha-response"]').forEach(el => {
-                    el.value = token;
-                });
-                // Override grecaptcha.execute for the page's submit handler
-                if (window.grecaptcha) {
-                    const origExecute = window.grecaptcha.execute;
-                    window.grecaptcha.execute = function() {
-                        return Promise.resolve(token);
-                    };
-                    if (window.grecaptcha.enterprise) {
-                        window.grecaptcha.enterprise.execute = function() {
-                            return Promise.resolve(token);
-                        };
-                    }
-                }
-            }""", captcha_token)
+            form_data["g-recaptcha-response"] = captcha_token
+        if turnstile_token:
+            form_data["cf-turnstile-response"] = turnstile_token
 
-        # Click submit — let the page's own JS handle the API call
-        submit = page.query_selector('input#signup-button') or \
-                 page.query_selector('input[type="submit"]')
-        if not submit:
-            log("Submit button not found!", "error", lq)
+        log(f"Form fields: {json.dumps({k: (v[:25]+'...' if len(v)>25 else v) for k,v in form_data.items()})}", "info", lq)
+
+        if not turnstile_token:
+            log("WARNING: No Turnstile token — submit will likely fail", "error", lq)
+
+        # Direct API submit to accounts.gorgias.com (page JS won't submit without Turnstile)
+        SUBMIT_URL = "https://accounts.gorgias.com/signup/user/submit"
+        log(f"POST {SUBMIT_URL} ...", "info", lq)
+
+        submit_result = page.evaluate("""(args) => {
+            const [url, data] = args;
+            return fetch(url, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data),
+                credentials: 'include'
+            }).then(r => r.text().then(body => ({status: r.status, body: body})))
+              .catch(e => ({status: 0, body: e.toString()}));
+        }""", [SUBMIT_URL, form_data])
+
+        status = submit_result.get("status", 0)
+        body = submit_result.get("body", "")
+        log(f"submit → {status} {body[:300]}", "info", lq)
+
+        if status not in (200, 201, 202):
             browser.close()
             pw_ctx.stop()
-            return {"ok": False, "error": "submit_button_not_found"}
+            return {"ok": False, "error": f"submit_{status}: {body[:200]}"}
 
-        log("Clicking submit...", "info", lq)
-        submit.click(timeout=5000)
-
-        # Wait for response
-        time.sleep(10)
-        final_url = page.url
-        log(f"Post-submit URL: {final_url}", "info", lq)
-
-        # Check submit result
-        submit_responses = [r for r in api_responses if "submit" in r.get("url", "")]
-        for sr in submit_responses:
-            log(f"  submit result: {sr['status']} {sr['body'][:200]}", "info", lq)
-
-        submit_ok = any(r.get("status") in (200, 201, 202) and "submit" in r.get("url", "")
-                       for r in api_responses)
-
-        if not submit_ok and "signup" in final_url:
-            # Check page errors
-            error_text = page.evaluate("""() => {
-                const errs = document.querySelectorAll('[class*="error"], [class*="alert"], [role="alert"]');
-                return Array.from(errs).map(e => e.textContent.trim()).filter(t => t.length > 0 && t.length < 200).join(' | ');
-            }""")
-            if error_text:
-                log(f"Page error: {error_text}", "error", lq)
-            browser.close()
-            pw_ctx.stop()
-            err_detail = error_text or (submit_responses[0]["body"][:200] if submit_responses else "no_submit_response")
-            return {"ok": False, "error": f"signup_failed: {err_detail}"}
-
+        log("Signup submitted OK!", "ok", lq)
+        try:
+            resp_data = json.loads(body)
+            redirect_url = resp_data.get("redirect_url") or resp_data.get("redirect") or ""
+            if redirect_url:
+                log(f"Redirect: {redirect_url}", "ok", lq)
+                page.goto(redirect_url, wait_until="domcontentloaded", timeout=20000)
+        except Exception:
+            pass
+        time.sleep(3)
         final_url = page.url
         log(f"Post-submit URL: {final_url}", "info", lq)
 
