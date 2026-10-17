@@ -653,7 +653,34 @@ def _try_signup(sess: http.Session, email: str, password: str,
         else:
             log("No captcha tokens available, submitting without", "warn", lq)
 
-        # Click submit — it's input[type="submit"]#signup-button
+        # Wait for Turnstile to complete (it disables the submit button)
+        log("Waiting for Turnstile challenge to complete...", "info", lq)
+        turnstile_done = False
+        for _ in range(15):
+            cf_val = page.evaluate("""() => {
+                const el = document.querySelector('input[name="cf-turnstile-response"]');
+                return el ? el.value : '';
+            }""")
+            if cf_val:
+                log(f"Turnstile auto-solved (token len={len(cf_val)})", "ok", lq)
+                turnstile_done = True
+                break
+            time.sleep(1)
+
+        if not turnstile_done:
+            log("Turnstile not auto-solved, force-enabling submit button", "warn", lq)
+
+        # Force-enable the submit button (it's disabled until Turnstile completes)
+        page.evaluate("""() => {
+            const btn = document.querySelector('input#signup-button') ||
+                        document.querySelector('input[type="submit"]');
+            if (btn) {
+                btn.disabled = false;
+                btn.removeAttribute('disabled');
+            }
+        }""")
+
+        # Click submit
         submit = page.query_selector('input#signup-button') or \
                  page.query_selector('input[type="submit"]') or \
                  page.query_selector('button:has-text("Create my account")')
@@ -664,7 +691,7 @@ def _try_signup(sess: http.Session, email: str, password: str,
             return {"ok": False, "error": "submit_button_not_found"}
 
         log("Clicking 'Create my account'...", "info", lq)
-        submit.click()
+        submit.click(timeout=10000)
 
         # Wait for either navigation or XHR response
         time.sleep(8)
