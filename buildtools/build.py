@@ -39,6 +39,8 @@ def build(app: dict) -> Path:
         "--workpath", str(ROOT / "build"),
         "--specpath", str(ROOT / "build"),
     ]
+    for module in ("pytest", "_pytest", "py", "pygments"):  # тестовые зависимости в exe не нужны
+        args += ["--exclude-module", module]
     if app["admin"]:
         args.append("--uac-admin")  # честно просим права администратора манифестом
     PyInstaller.__main__.run(args)

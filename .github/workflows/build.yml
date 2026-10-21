@@ -36,6 +36,8 @@ jobs:
         env:
           PYINSTALLER_COMPILE_BOOTLOADER: "1"
         run: pip install --no-binary pyinstaller pyinstaller==6.22.3
+      - name: Проверка, что загрузчик собран у нас
+        run: python buildtools/check_bootloader.py
       - run: python -m pytest -q
       - name: Build exe
         run: python buildtools/build.py
