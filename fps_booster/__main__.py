@@ -30,12 +30,18 @@ def main(argv: list[str] | None = None) -> int:
 
     from .backup import Backup
     from .games import detect_games
+    from .gpu import list_gpus, pick_best
     from .tweaks import apply_tweaks, build_tweaks, revert_all
 
     backup = Backup()
     games = detect_games()
-    tweaks = build_tweaks(games)
+    gpus = list_gpus()
+    gpu = pick_best(gpus)
+    tweaks = build_tweaks(games, gpu)
     if args.list:
+        for g in gpus:
+            mark = "*" if g is gpu else " "
+            print(f"[gpu{mark}] {g.name} ({g.vendor}, {g.vram // 2**20} МБ, драйвер {g.driver_version} от {g.driver_date})")
         for game in games:
             print(f"[игра] {game.profile.name}: {game.install_dir}")
         for t in tweaks:

@@ -36,7 +36,8 @@ VSVersionInfo(
 def write(name: str, version: str, description: str) -> Path:
     parts = [int(p) for p in version.split(".")][:4]
     parts += [0] * (4 - len(parts))
-    out = ROOT / "packaging" / f"{name.lower()}_version.txt"
+    out = ROOT / "build" / f"{name.lower()}_version.txt"
+    out.parent.mkdir(exist_ok=True)
     out.write_text(TEMPLATE.format(tup=tuple(parts), version=version, name=name,
                                    exe=f"{name}.exe", description=description), "utf-8")
     return out

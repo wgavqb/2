@@ -6,12 +6,14 @@ from __future__ import annotations
 import json
 import threading
 import time
+import webbrowser
 
 import psutil
 
 from . import APP_NAME, __version__
 from .backup import Backup, data_dir
 from .games import PROFILES, detect_games
+from .gpu import VENDOR_INFO, list_gpus, open_panel, pick_best
 from .system import clean_temp, list_startup, purge_standby_memory, set_startup_enabled
 from .tweaks import apply_tweaks, build_tweaks, revert_all
 from .winutil import is_admin
@@ -29,9 +31,15 @@ class Api:
         self._admin = is_admin()
         self._backup = Backup()
         self._games = detect_games()
-        self._tweaks = build_tweaks(self._games)
         self._settings_path = data_dir() / "settings.json"
         self._settings = self._load_settings()
+        try:
+            self._gpus = list_gpus()
+        except Exception:  # noqa: BLE001 — без списка карт программа всё равно работает
+            self._gpus = []
+        self._gpu = (next((g for g in self._gpus if g.id == self._settings.get("gpu")), None)
+                     or pick_best(self._gpus))
+        self._tweaks = build_tweaks(self._games, self._gpu)
         self._logs: list[dict] = []
         self._log_lock = threading.Lock()
         self._busy = threading.Lock()
@@ -44,6 +52,11 @@ class Api:
             self._log("Запущено без прав администратора — часть оптимизаций недоступна.", "warn")
         if not self._games:
             self._log("CS2 и Dota 2 не найдены — применятся только оптимизации ПК.", "warn")
+        if self._gpu:
+            self._log(f"Видеокарта: {self._gpu.name}", "info")
+            age = self._gpu.driver_age_days
+            if age is not None and age > 180:
+                self._log(f"Драйверу видеокарты {age // 30} мес. — обновите его, это бесплатный прирост FPS", "warn")
         if self._settings.get("watch", True):
             self._start_watch()
 
@@ -79,6 +92,7 @@ class Api:
             "id": t.id, "title": t.title, "description": t.description,
             "category": t.category, "needs_admin": t.needs_admin,
             "needs_reboot": t.needs_reboot, "available": t.available(),
+            "reason": t.unavailable_reason,
             "locked": t.needs_admin and not self._admin,
             "applied": t.is_applied(self._backup),
             "selected": bool(selected.get(t.id, t.default)) and t.available(),
@@ -117,9 +131,50 @@ class Api:
                 "notes": [[k, v] for k, v in LAUNCH_NOTES.items() if k in p.launch_options],
             } for p in PROFILES],
             "tweaks": self._tweak_info(),
+            **self._gpu_state(),
             "settings": {"watch": self._settings.get("watch", True),
                          "purge_on_start": self._settings.get("purge_on_start", True)},
         }
+
+    def _gpu_state(self) -> dict:
+        vendor = self._gpu.vendor if self._gpu else "other"
+        return {
+            "gpus": [g.to_dict() for g in self._gpus],
+            "gpu": self._gpu.id if self._gpu else None,
+            "vendor": {"key": vendor, **VENDOR_INFO[vendor]},
+        }
+
+    def set_gpu(self, gpu_id: str) -> dict:
+        """Пользователь выбрал видеокарту — пересобираем оптимизации под неё."""
+        gpu = next((g for g in self._gpus if g.id == gpu_id), None)
+        if gpu is not None:
+            self._gpu = gpu
+            self._settings["gpu"] = gpu.id
+            # выбор по умолчанию зависит от карты (например, HAGS) — сбрасываем ручной выбор
+            self._settings.pop("selected", None)
+            self._save_settings()
+            self._tweaks = build_tweaks(self._games, gpu)
+            self._log(f"Оптимизации подобраны под {gpu.name}", "ok")
+        return {"tweaks": self._tweak_info(), **self._gpu_state()}
+
+    def recommend(self) -> list[dict]:
+        """Вернуть рекомендуемый набор для этого ПК."""
+        self._settings.pop("selected", None)
+        self._save_settings()
+        return self._tweak_info()
+
+    def open_gpu_panel(self) -> bool:
+        vendor = self._gpu.vendor if self._gpu else "other"
+        if open_panel(vendor):
+            return True
+        url = VENDOR_INFO[vendor]["driver_url"]
+        if url:
+            webbrowser.open(url)
+        return False
+
+    def open_url(self, url: str) -> None:
+        if isinstance(url, str) and url.startswith("https://"):
+            webbrowser.open(url)
 
     def poll(self, log_cursor: int = 0) -> dict:
         """Живые данные для дашборда + новые строки журнала."""

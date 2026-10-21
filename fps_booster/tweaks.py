@@ -10,9 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+import sys
+
 from . import games as games_mod
+from . import nvidia
 from .backup import Backup
-from .winutil import REG_DWORD, REG_SZ, reg_read, reg_restore, reg_write, run
+from .gpu import GPU, supports_hags
+from .winutil import IS_WINDOWS, REG_DWORD, REG_SZ, reg_read, reg_restore, reg_write, run
 
 Log = Callable[[str], None]
 
@@ -38,10 +42,11 @@ class Tweak:
     id = ""
     title = ""
     description = ""
-    category = "game"  # "game" — для игр, "system" — для всего ПК
+    category = "game"  # "game" — для игр, "gpu" — для видеокарты, "system" — для всего ПК
     default = True
     needs_admin = False
     needs_reboot = False
+    unavailable_reason = "игра не найдена"
 
     def available(self) -> bool:
         return True
@@ -125,22 +130,88 @@ class PowerPlanTweak(Tweak):
             backup.remember("power|active", current)
 
 
-class GpuPreferenceTweak(RegistryTweak):
-    """Windows «Настройки графики» → Высокая производительность для exe игры."""
+DX_PREFS = r"Software\Microsoft\DirectX\UserGpuPreferences"
 
-    def __init__(self, installed: list[games_mod.InstalledGame]):
-        values = [
-            RegValue("HKCU", r"Software\Microsoft\DirectX\UserGpuPreferences",
-                     str(g.exe_path), "GpuPreference=2;", REG_SZ)
-            for g in installed
-        ]
+
+class GpuPreferenceTweak(RegistryTweak):
+    """Windows «Настройки графики» → нужная видеокарта для exe игры."""
+
+    def __init__(self, installed: list[games_mod.InstalledGame], gpu: GPU | None):
+        # 2 — «Высокая производительность» (дискретная), 1 — «Энергосбережение» (встроенная)
+        pref = 1 if gpu is not None and gpu.integrated else 2
+        values = [RegValue("HKCU", DX_PREFS, str(g.exe_path), f"GpuPreference={pref};", REG_SZ)
+                  for g in installed]
+        target = gpu.name if gpu else "мощной видеокарте"
         super().__init__(
             "gpu_pref",
-            "Игры всегда на мощной видеокарте",
-            "Для ноутбуков с двумя GPU: CS2 и Dota 2 не запустятся случайно на встроенной "
-            "графике. На ПК с одной видеокартой вреда нет.",
-            values,
+            f"Игры всегда на {target}" if gpu else "Игры всегда на мощной видеокарте",
+            "CS2 и Dota 2 запускаются строго на выбранной карте. Особенно важно для ноутбуков "
+            "с двумя GPU: игра не уйдёт случайно на слабую встроенную графику.",
+            values, category="gpu",
         )
+
+
+def merge_dx_settings(current: str, updates: dict[str, str]) -> str:
+    """'VRROptimizeEnable=0;' + {'SwapEffectUpgradeEnable': '1'} → обе настройки, порядок сохраняется."""
+    pairs: dict[str, str] = {}
+    for item in (current or "").split(";"):
+        if "=" in item:
+            key, value = item.split("=", 1)
+            pairs[key.strip()] = value.strip()
+    pairs.update(updates)
+    return "".join(f"{k}={v};" for k, v in pairs.items())
+
+
+class WindowedOptimizationTweak(RegistryTweak):
+    """Windows 11 → «Оптимизации для игр в окне»: современная цепочка кадров (flip model)."""
+
+    unavailable_reason = "нужна Windows 11"
+
+    def __init__(self):
+        super().__init__(
+            "windowed_opt",
+            "Оптимизация игр в окне (Windows 11)",
+            "Для режима «Окно без рамки»: меньше задержка и выше FPS, работает как полноэкранный. "
+            "Картинку не меняет. Подходит для всех видеокарт.",
+            [RegValue("HKCU", DX_PREFS, "DirectXUserGlobalSettings", "", REG_SZ)], category="gpu",
+        )
+
+    def available(self) -> bool:
+        return not IS_WINDOWS or sys.getwindowsversion().build >= 22000
+
+    def apply(self, backup: Backup, log: Log) -> None:
+        v = self.values[0]
+        original = reg_read(v.root, v.path, v.name)
+        current = str(original["value"]) if original.get("exists") else ""
+        reg_write(v.root, v.path, v.name, merge_dx_settings(current, {"SwapEffectUpgradeEnable": "1"}), REG_SZ)
+        backup.remember(v.key, original)
+
+
+class NvidiaProfileTweak(Tweak):
+    id = "nvidia_profile"
+    title = "Драйвер NVIDIA: максимальная производительность для CS2 и Dota 2"
+    description = ("Как в «Панели управления NVIDIA», только автоматически и лишь для этих игр: "
+                   "электропитание — «Максимальная производительность», режим низкой задержки — «Вкл.». "
+                   "Карта не сбрасывает частоты, меньше input lag. Графика не меняется.")
+    category = "gpu"
+    needs_admin = True
+    unavailable_reason = "только для видеокарт NVIDIA"
+
+    def __init__(self, gpu: GPU | None):
+        self.gpu = gpu
+
+    def available(self) -> bool:
+        return self.gpu is not None and self.gpu.vendor == "nvidia" and (nvidia.available() or not IS_WINDOWS)
+
+    def backup_keys(self) -> list[str]:
+        return [f"nv|{p.process}" for p in games_mod.PROFILES]
+
+    def apply(self, backup: Backup, log: Log) -> None:
+        for profile in games_mod.PROFILES:
+            info = nvidia.apply_game(profile.process)
+            # при повторном BOOST исходные значения в бэкапе не перезаписываются
+            backup.remember(f"nv|{profile.process}", info)
+            log(f"  {profile.name}: профиль драйвера NVIDIA обновлён")
 
 
 class AutoexecTweak(Tweak):
@@ -164,10 +235,23 @@ class AutoexecTweak(Tweak):
             log(f"  {game.profile.name}: {path}")
 
 
-def build_tweaks(installed: list[games_mod.InstalledGame]) -> list[Tweak]:
+def build_tweaks(installed: list[games_mod.InstalledGame], gpu: GPU | None = None) -> list[Tweak]:
+    """Набор оптимизаций под найденные игры и выбранную видеокарту."""
     mmcss = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
+    hags_ok = gpu is not None and supports_hags(gpu)
     return [
-        GpuPreferenceTweak(installed),
+        GpuPreferenceTweak(installed, gpu),
+        NvidiaProfileTweak(gpu),
+        WindowedOptimizationTweak(),
+        RegistryTweak(
+            "hags", "Аппаратное планирование GPU (HAGS)",
+            ("Видеокарта сама управляет своей памятью: ниже задержка и нагрузка на процессор. "
+             + ("Ваша карта поддерживает — рекомендуем. " if hags_ok else
+                "Для старых карт не рекомендуется. ")
+             + "Нужна перезагрузка."),
+            [RegValue("HKLM", r"SYSTEM\CurrentControlSet\Control\GraphicsDrivers", "HwSchMode", 2)],
+            category="gpu", default=hags_ok, needs_reboot=True,
+        ),
         AutoexecTweak(installed),
         RegistryTweak(
             "game_mode", "Игровой режим Windows",
@@ -230,13 +314,6 @@ def build_tweaks(installed: list[games_mod.InstalledGame]) -> list[Tweak]:
                       "EnableTransparency", 0)],
             category="system", default=False,
         ),
-        RegistryTweak(
-            "hags", "Аппаратное планирование GPU (HAGS)",
-            "Снижает задержку и нагрузку на CPU на видеокартах NVIDIA GTX 10xx+/AMD RX 5000+. "
-            "На старых GPU лучше не включать. Нужна перезагрузка.",
-            [RegValue("HKLM", r"SYSTEM\CurrentControlSet\Control\GraphicsDrivers", "HwSchMode", 2)],
-            category="system", default=False, needs_reboot=True,
-        ),
     ]
 
 
@@ -257,6 +334,9 @@ def restore_key(key: str, backup: Backup, log: Log) -> None:
         reg_restore(root, path, name, original)
     elif kind == "cfg":
         games_mod.restore_autoexec(Path(key[len("cfg|"):]), original)
+    elif kind == "nv":
+        if nvidia.available():  # драйвер NVIDIA удалён — откатывать нечего
+            nvidia.revert_game(key[len("nv|"):], original or {})
     elif key == "power|active":
         if original:
             run("powercfg", "/setactive", original)

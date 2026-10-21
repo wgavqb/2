@@ -4,9 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FPS Booster</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Unbounded:wght@600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="fonts.css">
 <style>
 :root {
   --bg: #06070b;
@@ -265,6 +263,27 @@ h3 { font: 600 12px var(--font); text-transform: uppercase; letter-spacing: .12e
 
 /* оптимизации */
 .tw-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* видеокарта */
+.gpu-card { padding: 22px 24px; display: grid; grid-template-columns: auto 1fr auto; gap: 22px; align-items: center; overflow: hidden; --vc: var(--a3); --vg: rgba(139, 92, 255, .25); }
+.gpu-card.nvidia { --vc: #76b900; --vg: rgba(118, 185, 0, .22); }
+.gpu-card.amd { --vc: #ed1c24; --vg: rgba(237, 28, 36, .22); }
+.gpu-card.intel { --vc: #0a84ff; --vg: rgba(10, 132, 255, .22); }
+.gpu-card::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: radial-gradient(90% 160% at 0% 0%, var(--vg), transparent 60%); }
+.vlogo { position: relative; width: 68px; height: 68px; border-radius: 20px; display: grid; place-items: center; font: 800 12px var(--display); letter-spacing: .06em; color: #fff; background: linear-gradient(135deg, var(--vc), color-mix(in srgb, var(--vc) 55%, #000)); box-shadow: 0 12px 30px var(--vg); }
+.gpu-info { position: relative; min-width: 0; }
+.gpu-name { font: 800 19px var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gpu-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.gpu-side { position: relative; display: grid; gap: 8px; justify-items: end; }
+.gpu-side .row { display: flex; gap: 8px; }
+.gsel { appearance: none; padding: 9px 34px 9px 12px; border-radius: 11px; border: 1px solid var(--border-strong); background: rgba(0,0,0,.35) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%23858ba0' stroke-width='2' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") right 12px center no-repeat; color: var(--text); font: 500 13px var(--font); max-width: 300px; cursor: pointer; outline: none; }
+.gsel option { background: #12141c; }
+.gpu-auto { font-size: 12px; color: var(--muted); }
+.gpu-auto b { color: var(--text); }
+.vtips { padding: 18px 20px; margin-top: 12px; display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: start; }
+.vtips h4 { font-size: 14px; }
+.vtips ul { margin-top: 8px; padding-left: 18px; display: grid; gap: 5px; }
+.vtips li { font-size: 13px; color: var(--muted); }
 .tw {
   padding: 16px 18px; display: flex; gap: 14px; align-items: flex-start; transition: .2s; cursor: pointer;
 }
@@ -362,6 +381,8 @@ h3 { font: 600 12px var(--font); text-transform: uppercase; letter-spacing: .12e
 
 @media (max-width: 1080px) {
   .dash, .games, .tw-grid, .tips { grid-template-columns: 1fr; }
+  .gpu-card { grid-template-columns: auto 1fr; }
+  .gpu-side { grid-column: 1 / -1; justify-items: start; }
   .quick { grid-template-columns: 1fr; }
 }
 </style>
@@ -481,6 +502,9 @@ h3 { font: 600 12px var(--font); text-transform: uppercase; letter-spacing: .12e
           </div>
         </div>
 
+        <h3>Видеокарта</h3>
+        <div class="card gpu-card" id="gpuCard"></div>
+
         <h3>Игры</h3>
         <div class="games" id="gameCards"></div>
 
@@ -512,6 +536,7 @@ h3 { font: 600 12px var(--font); text-transform: uppercase; letter-spacing: .12e
             <p class="lead">Выберите, что применить кнопкой BOOST. Ни один пункт не снижает качество графики в играх.</p>
           </div>
           <div style="display:flex;gap:8px">
+            <button class="btn ghost" id="selRec" title="Набор, подобранный под вашу видеокарту и ПК">★ Рекомендуемое</button>
             <button class="btn ghost" id="selAll">Выбрать все</button>
             <button class="btn primary" id="boost2">
               <svg viewBox="0 0 24 24" fill="#fff"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>BOOST</button>
@@ -519,6 +544,9 @@ h3 { font: 600 12px var(--font); text-transform: uppercase; letter-spacing: .12e
         </div>
         <h3 style="margin-top:4px">Для игр</h3>
         <div class="tw-grid" id="twGame"></div>
+        <h3>Для видеокарты <span id="gpuShort" style="text-transform:none;letter-spacing:0;color:var(--dim)"></span></h3>
+        <div class="tw-grid" id="twGpu"></div>
+        <div class="card vtips" id="vendorTips"></div>
         <h3>Для всего ПК</h3>
         <div class="tw-grid" id="twSystem"></div>
       </section>
@@ -638,7 +666,69 @@ function renderAll() {
   $("#cpuName").textContent = `${S.cpu_name} · ${S.cores} потоков`;
   $("#watchSw").checked = S.settings.watch;
   $("#purgeSw").checked = S.settings.purge_on_start;
-  renderTweaks(); renderGames(); renderLaunch();
+  renderGpu(); renderTweaks(); renderGames(); renderLaunch();
+}
+
+const VENDOR_LOGO = { nvidia: "NVIDIA", amd: "AMD", intel: "intel", other: "GPU" };
+function fmtDate(iso) { if (!iso) return ""; const [y, m, d] = iso.split("-"); return `${d}.${m}.${y}`; }
+function renderGpu() {
+  const card = $("#gpuCard");
+  const g = S.gpus.find(x => x.id === S.gpu);
+  const v = S.vendor;
+  $("#gpuShort").textContent = g ? "· " + g.name : "";
+  if (!g) {
+    card.className = "card gpu-card";
+    card.innerHTML = `<div class="vlogo">GPU</div><div class="gpu-info"><div class="gpu-name">Видеокарта не определена</div>
+      <div class="lead" style="margin-top:6px">Общие оптимизации всё равно применятся. Проверьте, установлен ли драйвер видеокарты.</div></div><div></div>`;
+  } else {
+    card.className = "card gpu-card " + g.vendor;
+    const age = g.driver_age_days;
+    const drv = g.driver_display ? `<span class="chip">Драйвер <b>${esc(g.driver_display)}</b>${g.driver_date ? " · " + fmtDate(g.driver_date) : ""}</span>` : "";
+    const ageChip = age == null ? "" : age > 180
+      ? `<span class="pill bad">Драйверу ${Math.floor(age / 30)} мес. — обновите</span>`
+      : age > 90 ? `<span class="pill mut">Драйвер ${Math.floor(age / 30)} мес.</span>` : `<span class="pill good">✔ Свежий драйвер</span>`;
+    const auto = S.tweaks.filter(t => t.category === "gpu" && t.available).length;
+    const select = S.gpus.length > 1
+      ? `<select class="gsel" id="gpuSel" title="Под какую карту оптимизировать">${S.gpus.map(x =>
+          `<option value="${esc(x.id)}" ${x.id === g.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : "";
+    card.innerHTML = `<div class="vlogo">${VENDOR_LOGO[g.vendor] || "GPU"}</div>
+      <div class="gpu-info"><div class="gpu-name" title="${esc(g.name)}">${esc(g.name)}</div>
+        <div class="gpu-meta">
+          <span class="chip">${g.integrated ? "Встроенная" : "Дискретная"}</span>
+          ${g.vram ? `<span class="chip">Видеопамять <b>${g.vram < 2 ** 30 ? Math.round(g.vram / 2 ** 20) + " МБ" : Math.round(g.vram / 2 ** 30) + " ГБ"}</b></span>` : ""}
+          ${drv}${ageChip}
+        </div></div>
+      <div class="gpu-side">${select}
+        <span class="gpu-auto">Под эту карту: <b>${auto}</b> оптимизаций для видеокарты</span>
+        <div class="row">
+          ${v.driver_url ? `<button class="btn" id="drvBtn">Обновить драйвер</button>` : ""}
+          ${v.panel ? `<button class="btn" id="panelBtn">Открыть панель</button>` : ""}
+        </div></div>`;
+    const sel = $("#gpuSel");
+    if (sel) sel.addEventListener("change", async () => {
+      const r = await api("set_gpu", sel.value);
+      if (!r) return;
+      Object.assign(S, { tweaks: r.tweaks, gpus: r.gpus, gpu: r.gpu, vendor: r.vendor });
+      renderGpu(); renderTweaks(); renderGames();
+      toast("Оптимизации подобраны под " + S.gpus.find(x => x.id === S.gpu).name);
+    });
+    const drvBtn = $("#drvBtn");
+    if (drvBtn) drvBtn.addEventListener("click", () => api("open_url", v.driver_url));
+    const panelBtn = $("#panelBtn");
+    if (panelBtn) panelBtn.addEventListener("click", openPanel);
+  }
+  // подсказки производителя на странице оптимизаций
+  const tips = $("#vendorTips");
+  if (v.tips && v.tips.length) {
+    tips.style.display = "";
+    tips.innerHTML = `<div><h4>Ещё 2 минуты вручную в «${esc(v.panel)}»</h4><ul>${v.tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>
+      <button class="btn" id="panelBtn2">Открыть</button>`;
+    $("#panelBtn2").addEventListener("click", openPanel);
+  } else tips.style.display = "none";
+}
+async function openPanel() {
+  const ok = await api("open_gpu_panel");
+  toast(ok ? `Открываю «${S.vendor.panel}»` : "Программа производителя не найдена — открываю сайт с драйверами", ok ? "ok" : "warn");
 }
 
 function renderScore() {
@@ -667,8 +757,8 @@ function animateNumber(el, to) {
 }
 
 function renderTweaks() {
-  for (const cat of ["game", "system"]) {
-    const box = $(cat === "game" ? "#twGame" : "#twSystem");
+  for (const cat of ["game", "gpu", "system"]) {
+    const box = $({ game: "#twGame", gpu: "#twGpu", system: "#twSystem" }[cat]);
     box.innerHTML = "";
     for (const t of S.tweaks.filter(x => x.category === cat)) {
       const el = document.createElement("div");
@@ -676,7 +766,7 @@ function renderTweaks() {
       el.className = "card tw" + (t.selected ? " on" : "") + (enabled ? "" : " off-avail");
       const tags = [];
       if (t.applied) tags.push(`<span class="tag applied">✔ применено</span>`);
-      if (!t.available) tags.push(`<span class="tag">игра не найдена</span>`);
+      if (!t.available) tags.push(`<span class="tag">${esc(t.reason || "недоступно")}</span>`);
       else if (t.locked) tags.push(`<span class="tag lock">нужен админ</span>`);
       else if (t.needs_admin) tags.push(`<span class="tag">админ</span>`);
       if (t.needs_reboot) tags.push(`<span class="tag">перезагрузка</span>`);
@@ -787,6 +877,10 @@ async function boost() {
 }
 $("#boostBtn").addEventListener("click", boost);
 $("#boost2").addEventListener("click", () => { go("home"); setTimeout(boost, 250); });
+$("#selRec").addEventListener("click", async () => {
+  const r = await api("recommend");
+  if (r) { S.tweaks = r; renderTweaks(); renderGpu(); toast("Выбран рекомендуемый набор для вашего ПК"); }
+});
 $("#selAll").addEventListener("click", () => {
   S.tweaks.forEach(t => { if (t.available && !t.locked) { t.selected = true; api("set_selected", t.id, true); } });
   renderTweaks();
@@ -884,7 +978,10 @@ const Mock = (() => {
   const logs = [];
   const log = (msg, level = "info") => logs.push({ id: logs.length, t: new Date().toTimeString().slice(0, 8), msg, level });
   const tweaks = [
-    ["gpu_pref", "Игры всегда на мощной видеокарте", "Для ноутбуков с двумя GPU: CS2 и Dota 2 не запустятся случайно на встроенной графике.", "game", 0, 0, 1],
+    ["gpu_pref", "Игры всегда на NVIDIA GeForce RTX 4070 SUPER", "CS2 и Dota 2 запускаются строго на выбранной карте. Особенно важно для ноутбуков с двумя GPU.", "gpu", 0, 0, 1],
+    ["nvidia_profile", "Драйвер NVIDIA: максимальная производительность для CS2 и Dota 2", "Как в «Панели управления NVIDIA», только автоматически: электропитание — «Максимальная производительность», режим низкой задержки — «Вкл.». Графика не меняется.", "gpu", 1, 0, 1],
+    ["windowed_opt", "Оптимизация игр в окне (Windows 11)", "Для режима «Окно без рамки»: меньше задержка и выше FPS, работает как полноэкранный.", "gpu", 0, 0, 1],
+    ["hags", "Аппаратное планирование GPU (HAGS)", "Видеокарта сама управляет своей памятью: ниже задержка и нагрузка на процессор. Ваша карта поддерживает — рекомендуем.", "gpu", 1, 1, 1],
     ["autoexec", "Безопасный autoexec.cfg для CS2 / Dota 2", "Снимает лимит FPS в игре, ограничивает FPS в меню. Графику не трогает.", "game", 0, 0, 1],
     ["game_mode", "Игровой режим Windows", "Windows отдаёт игре приоритет по CPU/GPU и не ставит обновления во время игры.", "game", 0, 0, 1],
     ["game_dvr", "Отключить фоновую запись Xbox Game DVR", "Фоновая запись геймплея постоянно ест GPU и диск.", "game", 0, 0, 1],
@@ -894,11 +991,28 @@ const Mock = (() => {
     ["background_apps", "Запретить фоновую работу приложений Store", "Приложения из Microsoft Store не работают в фоне и не едят CPU/ОЗУ.", "system", 0, 0, 1],
     ["ui_fast", "Быстрый интерфейс Windows", "Меню открываются без задержки, окна сворачиваются без анимации.", "system", 0, 1, 1],
     ["transparency", "Отключить прозрачность Windows", "Немного разгружает видеокарту на рабочем столе.", "system", 0, 0, 0],
-    ["hags", "Аппаратное планирование GPU (HAGS)", "Снижает задержку на видеокартах GTX 10xx+/RX 5000+.", "system", 1, 1, 0],
   ].map(([id, title, description, category, needs_admin, needs_reboot, def]) => ({
     id, title, description, category, needs_admin: !!needs_admin, needs_reboot: !!needs_reboot,
-    available: true, locked: false, applied: false, selected: !!def,
+    available: true, locked: false, applied: false, selected: !!def, reason: "",
   }));
+  const gpus = [
+    { id: "10de:2783:01", name: "NVIDIA GeForce RTX 4070 SUPER", vendor: "nvidia", vram: 12 * 2 ** 30, integrated: false, driver_display: "560.94", driver_date: "2024-09-19", driver_age_days: 760 },
+    { id: "8086:a780:02", name: "Intel(R) UHD Graphics 770", vendor: "intel", vram: 128 * 2 ** 20, integrated: true, driver_display: "31.0.101.5590", driver_date: "2026-08-02", driver_age_days: 80 },
+  ];
+  const vendors = {
+    nvidia: { key: "nvidia", name: "NVIDIA", panel: "Панель управления NVIDIA", driver_url: "https://www.nvidia.com/ru-ru/drivers/", tips: [
+      "В CS2: Настройки → Видео → NVIDIA Reflex — «Включено + Boost».",
+      "Панель NVIDIA → Параметры 3D → Размер кэша шейдеров — «Без ограничений»: меньше фризов при первой загрузке карт.",
+      "Если монитор с G-SYNC: включите G-SYNC и V-Sync в панели NVIDIA, а в игре V-Sync выключите."] },
+    intel: { key: "intel", name: "Intel", panel: "Intel Graphics Software", driver_url: "https://www.intel.com/content/www/us/en/support/detect.html", tips: [
+      "Встроенная графика: две планки оперативной памяти (двухканальный режим) дают до +50% FPS.",
+      "Intel Graphics Software → Графика → Режим низкой задержки — «Вкл.»."] },
+  };
+  let gpu = gpus[0];
+  const sync = () => tweaks.forEach(tw => {
+    if (tw.id === "nvidia_profile") { tw.available = gpu.vendor === "nvidia"; tw.reason = "только для видеокарт NVIDIA"; tw.selected = tw.available; }
+    if (tw.id === "gpu_pref") tw.title = "Игры всегда на " + gpu.name;
+  });
   const st = [
     ["Discord", "C:\\Users\\Player\\AppData\\Local\\Discord\\Update.exe --processStart Discord.exe", true],
     ["Steam", "\"C:\\Program Files (x86)\\Steam\\steam.exe\" -silent", true],
@@ -910,8 +1024,8 @@ const Mock = (() => {
   log("Демо-режим: откройте программу на Windows для реальной работы", "warn");
   return {
     get_state: () => ({
-      app: "FPS Booster", version: "1.0.0", admin: true, cpu_name: "AMD Ryzen 7 5800X3D 8-Core Processor", cores: 16,
-      ram_total: 32 * 2 ** 30, tweaks,
+      app: "FPS Booster", version: "1.0.1", admin: true, cpu_name: "AMD Ryzen 7 5800X3D 8-Core Processor", cores: 16,
+      ram_total: 32 * 2 ** 30, tweaks, gpus, gpu: gpu.id, vendor: vendors[gpu.vendor],
       games: [
         { key: "cs2", name: "Counter-Strike 2", found: true, path: "D:\\SteamLibrary\\steamapps\\common\\Counter-Strike Global Offensive", launch: "-novid -nojoy +exec autoexec",
           notes: [["-novid", "без заставки при запуске"], ["-nojoy", "не грузить поддержку джойстиков — меньше ОЗУ"], ["+exec autoexec", "гарантированно выполнить autoexec.cfg"]] },
@@ -935,6 +1049,9 @@ const Mock = (() => {
     clean_temp: () => ({ count: 1284, size: 734 * 2 ** 20 }),
     get_startup: () => st,
     set_startup: (i, v) => { st[i].enabled = v; return { ok: true }; },
+    set_gpu: id => { gpu = gpus.find(g => g.id === id); sync(); log("Оптимизации подобраны под " + gpu.name, "ok"); return { tweaks, gpus, gpu: gpu.id, vendor: vendors[gpu.vendor] }; },
+    recommend: () => { tweaks.forEach(tw => tw.selected = tw.available && tw.id !== "transparency"); return tweaks; },
+    open_gpu_panel: () => true, open_url: () => null,
     set_selected: () => null, set_setting: () => null, minimize: () => null, close: () => null,
   };
 })();

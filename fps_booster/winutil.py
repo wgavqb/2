@@ -83,6 +83,23 @@ def reg_values(root: str, path: str) -> list[tuple[str, object, int]]:
     return result
 
 
+def reg_subkeys(root: str, path: str) -> list[str]:
+    """Имена подразделов ключа (недоступные пропускаются)."""
+    result = []
+    try:
+        with winreg.OpenKey(_root(root), path, 0, winreg.KEY_READ | _view()) as key:
+            i = 0
+            while True:
+                try:
+                    result.append(winreg.EnumKey(key, i))
+                except OSError:
+                    break
+                i += 1
+    except OSError:
+        pass
+    return result
+
+
 def run(*args: str, check: bool = True) -> str:
     """Запуск консольной утилиты без мигающего окна."""
     proc = subprocess.run(

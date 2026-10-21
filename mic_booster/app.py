@@ -14,11 +14,22 @@ def ui_file() -> Path:
     return base / "mic_booster" / "ui" / "index.html"
 
 
+def ui_html() -> str:
+    """Страница целиком в одной строке: шрифты встраиваются, сеть не нужна.
+
+    Атрибут data-app говорит странице, что она внутри приложения, а не в браузере (демо)."""
+    ui = ui_file()
+    fonts = (ui.parent / "fonts.css").read_text("utf-8")
+    return (ui.read_text("utf-8")
+            .replace('<link rel="stylesheet" href="fonts.css">', f"<style>{fonts}</style>", 1)
+            .replace('<html lang="ru">', '<html lang="ru" data-app>', 1))
+
+
 def run(minimized: bool = False) -> None:
     import webview
 
     api = Api()
-    html = ui_file().read_text("utf-8").replace('<html lang="ru">', '<html lang="ru" data-app>', 1)
+    html = ui_html()
     window = webview.create_window(
         APP_NAME, html=html, js_api=api,
         width=1240, height=820, min_size=(1000, 680),

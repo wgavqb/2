@@ -4,9 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MicPro</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Unbounded:wght@600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="fonts.css">
 <style>
 :root {
   --bg: #05060a;
@@ -641,7 +639,7 @@ const Mock = (() => {
   let on = false, t = 0;
   const shape = i => { const f = 60 * Math.pow(16000 / 60, i / 47); return Math.exp(-Math.pow(Math.log(f / 450) / 1.25, 2)); };
   return {
-    get_state: () => ({ version: "1.0.0", devices: {
+    get_state: () => ({ version: "1.0.1", devices: {
         inputs: [{ id: 1, name: "Микрофон (FIFINE AM8 Microphone)" }, { id: 2, name: "Микрофон (Realtek High Definition Audio)" }],
         outputs: [{ id: 3, name: "CABLE Input (VB-Audio Virtual Cable)" }, { id: 4, name: "Наушники (FIFINE AM8 Microphone)" }, { id: 5, name: "Динамики (Realtek High Definition Audio)" }] },
       selected: { input: "Микрофон (FIFINE AM8 Microphone)", output: "CABLE Input (VB-Audio Virtual Cable)", monitor: null },
