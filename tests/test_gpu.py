@@ -1,4 +1,5 @@
 import ctypes
+import sys
 
 from fps_booster import nvidia
 from fps_booster.gpu import (
@@ -63,8 +64,11 @@ def test_merge_dx_settings_keeps_existing():
             == "VRROptimizeEnable=0;SwapEffectUpgradeEnable=1;")
 
 
-def test_tweaks_follow_selected_gpu(tmp_path):
+def test_tweaks_follow_selected_gpu(tmp_path, monkeypatch):
     from fps_booster.games import CS2, InstalledGame
+
+    # на машине без драйвера NVIDIA (CI) делаем вид, что NVAPI есть
+    monkeypatch.setattr(nvidia, "available", lambda: True)
 
     games = [InstalledGame(CS2, tmp_path)]
     nv = {t.id: t for t in build_tweaks(games, gpu("NVIDIA GeForce RTX 4070", "nvidia"))}
@@ -73,6 +77,8 @@ def test_tweaks_follow_selected_gpu(tmp_path):
     igpu = {t.id: t for t in build_tweaks(games, gpu("Intel(R) UHD Graphics 770", "intel", 128 << 20))}
 
     assert nv["nvidia_profile"].available() and not amd["nvidia_profile"].available()
+    monkeypatch.setattr(nvidia, "available", lambda: False)
+    assert not nv["nvidia_profile"].available() or sys.platform != "win32"
     assert nv["hags"].default and amd["hags"].default and not old["hags"].default
     assert nv["gpu_pref"].values[0].value == "GpuPreference=2;"
     assert igpu["gpu_pref"].values[0].value == "GpuPreference=1;"
