@@ -291,6 +291,7 @@ def do_login(email, password):
     return False, err_text
 
 API_TOKENS = {'state_token': None, 'company_id': None, 'user_id': None, 'period': None, 'reply_to': None}
+_TOKEN_LOCK = threading.Lock()
 
 def refresh_api_tokens():
     """Загружаем токены для API из любой страницы ContaSimple."""
@@ -310,7 +311,9 @@ def refresh_api_tokens():
 def cs_api(method, service_url, body=None, _retry=2):
     """Вызов внутреннего API ContaSimple через прокси."""
     if not API_TOKENS['state_token']:
-        refresh_api_tokens()
+        with _TOKEN_LOCK:
+            if not API_TOKENS['state_token']:
+                refresh_api_tokens()
     req = {'StateToken': API_TOKENS['state_token'], 'Method': method, 'Service': service_url}
     if body is not None:
         req['Body'] = body
@@ -324,7 +327,8 @@ def cs_api(method, service_url, body=None, _retry=2):
             r = SESSION.post(BASE_URL + '/Services/ApiService/ApiService.asmx/Call',
                              data=json.dumps({'request': req}), headers=headers, timeout=60)
             if r.status_code == 401 or 'InvalidToken' in r.text:
-                refresh_api_tokens()
+                with _TOKEN_LOCK:
+                    refresh_api_tokens()
                 req['StateToken'] = API_TOKENS['state_token']
                 r = SESSION.post(BASE_URL + '/Services/ApiService/ApiService.asmx/Call',
                                  data=json.dumps({'request': req}), headers=headers, timeout=60)
@@ -542,6 +546,10 @@ def send_all():
         return jsonify({'ok': False, 'error': 'Нет валидных email'})
 
     THREADS = min(10, len(emails))  # до 10 параллельных потоков
+
+    # Прогрев токенов один раз до старта потоков
+    if not API_TOKENS['state_token']:
+        refresh_api_tokens()
 
     STOP_FLAG.clear()
     PROGRESS_LOCK = threading.Lock()
