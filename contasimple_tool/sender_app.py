@@ -355,8 +355,7 @@ def create_customer(email):
 def create_invoice(entity_id, description):
     """Создаём инвойс через API. Возвращает invoice_id."""
     period = API_TOKENS.get('period') or '2026-3T'
-    code, resp = cs_api('GET', f'/accounting/{period}/invoices/issued/nextInvoiceNumber?type=normal')
-    inv_number = resp.get('data', f'AUTO-{random.randint(1000,9999)}')
+    inv_number = f'A{int(time.time()*1000) % 10000000:07d}{random.randint(10,99)}'
 
     code, resp = cs_api('POST', f'/accounting/{period}/invoices/issued', {
         'TargetEntityId': entity_id,
