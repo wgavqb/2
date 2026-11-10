@@ -547,13 +547,14 @@ def send_all():
 
     THREADS = min(15, len(emails))  # до 15 параллельных потоков
 
+    STOP_FLAG.clear()
+    PROGRESS_LOCK = threading.Lock()
+    # Сразу показываем счётчик ДО прогрева токенов
+    PROGRESS.update({'done': 0, 'total': len(emails), 'log': [''] * len(emails), 'running': True})
+
     # Прогрев токенов один раз до старта потоков
     if not API_TOKENS['state_token']:
         refresh_api_tokens()
-
-    STOP_FLAG.clear()
-    PROGRESS_LOCK = threading.Lock()
-    PROGRESS.update({'done': 0, 'total': len(emails), 'log': [''] * len(emails), 'running': True})
     results = [None] * len(emails)
 
     def process_one(idx, email):
