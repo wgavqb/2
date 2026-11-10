@@ -660,11 +660,11 @@ button:disabled{opacity:.35;cursor:not-allowed}
     <label>ОПИСАНИЕ УСЛУГ (в инвойсе)</label>
     <textarea id="desc" placeholder="Professional consulting services..."></textarea>
 
-    <label>ТЕМА ПИСЬМА</label>
-    <textarea id="subj" style="height:50px" placeholder="Invoice - September 2026"></textarea>
+    <label>ТЕМА ПИСЬМА <span style="color:var(--accent2);font-size:.7rem;text-transform:none;letter-spacing:0">— используй {random_id} для уникального кода (6 симв.)</span></label>
+    <textarea id="subj" style="height:50px" placeholder="Invoice {random_id} - September 2026"></textarea>
 
-    <label>ТЕКСТ ПИСЬМА</label>
-    <textarea id="msg" placeholder="Find attached the invoice for services rendered.&#10;&#10;Best regards,"></textarea>
+    <label>ТЕКСТ ПИСЬМА <span style="color:var(--accent2);font-size:.7rem;text-transform:none;letter-spacing:0">— {random_id} заменится на случайный код</span></label>
+    <textarea id="msg" placeholder="Find attached the invoice {random_id} for services rendered.&#10;&#10;Best regards,"></textarea>
 
     <div class="row">
       <input id="capsolver" type="password" placeholder="CapSolver API Key (если есть капча)">
