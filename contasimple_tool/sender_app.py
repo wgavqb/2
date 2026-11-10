@@ -541,7 +541,7 @@ def send_all():
     if not emails:
         return jsonify({'ok': False, 'error': 'Нет валидных email'})
 
-    THREADS = min(5, len(emails))  # до 5 параллельных потоков
+    THREADS = min(10, len(emails))  # до 10 параллельных потоков
 
     STOP_FLAG.clear()
     PROGRESS_LOCK = threading.Lock()
