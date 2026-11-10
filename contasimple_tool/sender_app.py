@@ -748,7 +748,8 @@ function startPolling() {
   pollTimer = setInterval(async () => {
     try {
       const p = await fetch('/api/progress').then(r=>r.json());
-      lb.innerHTML = p.log.map(line => {
+      const lines = p.log.filter(l => l && l.trim());
+      lb.innerHTML = lines.map(line => {
         const cls = line.startsWith('✅') ? 'ok' : line.startsWith('❌') ? 'err' : 'wait';
         return `<div class="log-line ${cls}">${line}</div>`;
       }).join('');
@@ -756,7 +757,7 @@ function startPolling() {
       $('status').textContent = `Отправка: ${p.done}/${p.total}...`;
       if (!p.running) stopPolling();
     } catch {}
-  }, 600);
+  }, 200);
 }
 
 function stopPolling() {
