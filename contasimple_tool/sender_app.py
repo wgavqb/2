@@ -8,6 +8,7 @@ ContaSimple Quick Sender
   3. Для каждой почты: создаём клиента → создаём инвойс → шлём email
 """
 import os, re, random, string, datetime, time, json, threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urljoin, urlparse, parse_qs, quote_plus
 from pathlib import Path
 
@@ -541,15 +542,21 @@ def send_all():
     if not emails:
         return jsonify({'ok': False, 'error': 'Нет валидных email'})
 
+    THREADS = min(5, len(emails))  # до 5 параллельных потоков
+
     STOP_FLAG.clear()
-    PROGRESS.update({'done': 0, 'total': len(emails), 'log': [], 'running': True})
-    results = []
-    for email in emails:
+    PROGRESS_LOCK = threading.Lock()
+    PROGRESS.update({'done': 0, 'total': len(emails), 'log': [''] * len(emails), 'running': True})
+    results = [None] * len(emails)
+
+    def process_one(idx, email):
         if STOP_FLAG.is_set():
-            PROGRESS['log'].append(f'⛔ Остановлено на {email}')
-            results.append({'email': email, 'ok': False, 'error': 'Остановлено'})
-            continue
-        PROGRESS['log'].append(f'⏳ [{PROGRESS["done"]+1}/{len(emails)}] {email}...')
+            with PROGRESS_LOCK:
+                PROGRESS['log'][idx] = f'⛔ Остановлено на {email}'
+                PROGRESS['done'] += 1
+            return {'email': email, 'ok': False, 'error': 'Остановлено'}
+        with PROGRESS_LOCK:
+            PROGRESS['log'][idx] = f'⏳ [{idx+1}/{len(emails)}] {email}...'
         try:
             random_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
             e_subject = subject.replace('{random_id}', random_id)
@@ -558,15 +565,24 @@ def send_all():
             entity_id  = create_customer(email)
             invoice_id = create_invoice(entity_id, e_description)
             ok, err    = send_invoice(invoice_id, email, e_subject, e_message)
-            results.append({'email': email, 'ok': ok, 'invoice_id': invoice_id, 'error': err})
-            PROGRESS['log'][-1] = f'{"✅" if ok else "❌"} [{PROGRESS["done"]+1}/{len(emails)}] {email}' + (f' — {err}' if err else '')
+            with PROGRESS_LOCK:
+                PROGRESS['log'][idx] = f'{"✅" if ok else "❌"} [{idx+1}/{len(emails)}] {email}' + (f' — {err}' if err else '')
+                PROGRESS['done'] += 1
+            return {'email': email, 'ok': ok, 'invoice_id': invoice_id, 'error': err}
         except Exception as e:
-            results.append({'email': email, 'ok': False, 'error': str(e)})
-            PROGRESS['log'][-1] = f'❌ [{PROGRESS["done"]+1}/{len(emails)}] {email} — {str(e)[:80]}'
-        PROGRESS['done'] += 1
+            with PROGRESS_LOCK:
+                PROGRESS['log'][idx] = f'❌ [{idx+1}/{len(emails)}] {email} — {str(e)[:80]}'
+                PROGRESS['done'] += 1
+            return {'email': email, 'ok': False, 'error': str(e)}
+
+    with ThreadPoolExecutor(max_workers=THREADS) as executor:
+        futures = {executor.submit(process_one, i, email): i for i, email in enumerate(emails)}
+        for future in as_completed(futures):
+            idx = futures[future]
+            results[idx] = future.result()
 
     PROGRESS['running'] = False
-    total_ok = sum(1 for r in results if r['ok'])
+    total_ok = sum(1 for r in results if r and r['ok'])
     return jsonify({'ok': True, 'results': results, 'sent': total_ok, 'total': len(results)})
 
 # ── UI ────────────────────────────────────────────────────────────────────────
