@@ -152,7 +152,7 @@ def get_captcha_answer(soup):
 def ensure_auth():
     """Проверяем авторизацию, если нет — пробуем auto-login."""
     r = SESSION.get(urljoin(BASE_URL, '/Modulos/Default.aspx'),
-                    allow_redirects=False, timeout=8)
+                    allow_redirects=False, timeout=5)
     if r.status_code == 200:
         return True
     email = CONFIG.get('email', '')
@@ -166,12 +166,12 @@ def ensure_auth():
 
 def get_page(path):
     url = urljoin(BASE_URL, path)
-    r = SESSION.get(url, allow_redirects=False, timeout=60)
+    r = SESSION.get(url, allow_redirects=False, timeout=20)
     if r.status_code in (301, 302) and 'login' in r.headers.get('Location', '').lower():
         ensure_auth()
-        r = SESSION.get(url, allow_redirects=True, timeout=60)
+        r = SESSION.get(url, allow_redirects=True, timeout=20)
     elif r.status_code in (301, 302):
-        r = SESSION.get(url, allow_redirects=True, timeout=60)
+        r = SESSION.get(url, allow_redirects=True, timeout=20)
     return BeautifulSoup(r.text, 'html.parser'), r
 
 def get_form_action(html_text, page_url):
@@ -325,22 +325,22 @@ def cs_api(method, service_url, body=None, _retry=2):
     for attempt in range(_retry):
         try:
             r = SESSION.post(BASE_URL + '/Services/ApiService/ApiService.asmx/Call',
-                             data=json.dumps({'request': req}), headers=headers, timeout=60)
+                             data=json.dumps({'request': req}), headers=headers, timeout=20)
             if r.status_code == 401 or 'InvalidToken' in r.text:
                 with _TOKEN_LOCK:
                     refresh_api_tokens()
                 req['StateToken'] = API_TOKENS['state_token']
                 r = SESSION.post(BASE_URL + '/Services/ApiService/ApiService.asmx/Call',
-                                 data=json.dumps({'request': req}), headers=headers, timeout=60)
+                                 data=json.dumps({'request': req}), headers=headers, timeout=20)
             return r.status_code, r.json()
         except requests.exceptions.Timeout:
             if attempt < _retry - 1:
-                time.sleep(2)
+                time.sleep(1)
                 continue
             raise
         except requests.exceptions.ConnectionError:
             if attempt < _retry - 1:
-                time.sleep(3)
+                time.sleep(1)
                 continue
             raise
 
@@ -545,7 +545,7 @@ def send_all():
     if not emails:
         return jsonify({'ok': False, 'error': 'Нет валидных email'})
 
-    THREADS = min(10, len(emails))  # до 10 параллельных потоков
+    THREADS = min(15, len(emails))  # до 15 параллельных потоков
 
     # Прогрев токенов один раз до старта потоков
     if not API_TOKENS['state_token']:
