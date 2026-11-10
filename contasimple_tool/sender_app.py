@@ -434,6 +434,7 @@ def auth_cookie():
             SESSION.cookies.set(name.strip(), value.strip(), domain='.contasimple.com')
 
     save_cookies(cookie_str)
+    API_TOKENS.update({'state_token': None, 'company_id': None, 'user_id': None, 'period': None, 'reply_to': None})
     return jsonify({'ok': True, 'count': len(SESSION.cookies)})
 
 @app.route('/api/auth/login', methods=['POST'])
@@ -448,6 +449,11 @@ def auth_login():
         if ok:
             CONFIG['email'] = email
             CONFIG['password'] = password
+            API_TOKENS.update({'state_token': None, 'company_id': None, 'user_id': None, 'period': None, 'reply_to': None})
+            try:
+                refresh_api_tokens()
+            except Exception:
+                pass
         return jsonify({'ok': ok, 'error': err})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
