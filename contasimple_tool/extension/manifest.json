@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "ContaSimple Cookie Sync",
+  "version": "1.1",
+  "description": "Синхронизирует куки и перехватывает API-запросы ContaSimple",
+  "permissions": [
+    "cookies",
+    "activeTab",
+    "storage",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "https://app.contasimple.com/*",
+    "https://*.contasimple.com/*",
+    "http://127.0.0.1:5050/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16":  "icons/icon16.png",
+      "48":  "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
